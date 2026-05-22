@@ -4,5 +4,8 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   base: '/TestMindAI/',
+  build: {
+    sourcemap: false,
+  },
   plugins: [react(), tailwindcss()],
 })
