@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:full": "concurrently \"npm run dev\" \"npm run dev:server\"",
+    "dev:server": "cd server && npm run dev",
     "build": "tsc -b && vite build",
+    "build:server": "cd server && npm run build",
     "preview": "vite preview",
-    "deploy": "gh-pages -d dist"
+    "deploy": "gh-pages -d dist",
+    "server": "cd server && npm run dev"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.0",
