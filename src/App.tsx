@@ -3,8 +3,20 @@ import {
   Play, Pause, RotateCcw, Upload, FileText, Bug, Code, GitBranch, GitPullRequest,
   Database, BarChart2, Cpu, CheckCircle2, Terminal, RefreshCw, Sparkles, LayoutGrid,
   CheckSquare, Copy, Hammer, Menu, ExternalLink, Layers, Award, Globe, Laptop, Smartphone,
-  Gamepad2, Compass
+  Gamepad2, Compass, Plus, Trash2, X
 } from 'lucide-react';
+import { createDevSession, getGitHubAuthUrl } from './api/auth';
+import { createBugReport, getBugReports } from './api/bugs';
+import { createProject, getProjects } from './api/projects';
+import {
+  clearTestCases,
+  createTestCase,
+  deleteTestCase,
+  generateTestCases as generateTestCasesFromApi,
+  getTestCases,
+  updateTestCaseStatus,
+} from './api/testCases';
+import { uploadVideo } from './api/integrations';
 
 interface TestCase {
   id: string;
@@ -45,6 +57,14 @@ interface TimelineEvent {
   type: string;
   desc: string;
   status: 'info' | 'warning' | 'critical';
+}
+
+interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  app_description?: string;
+  platform_type?: string;
 }
 
 const PRISMA_SCHEMA_RAW = `// TESTMIND AI - DATABASE SCHEMA (PostgreSQL)
@@ -186,117 +206,69 @@ jobs:
         DATABASE_URL: \${{ secrets.DATABASE_URL }}
         NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: \${{ secrets.CLERK_KEY }}`;
 
-const INITIAL_TIMELINE_EVENTS: TimelineEvent[] = [
-  { id: '1', time: '00:02', event: 'Interaction Tracker', type: 'Click Detected', desc: 'User clicked "Proceed to Account Setup"', status: 'info' },
-  { id: '2', time: '00:08', event: 'OCR Engine', type: 'Screen Transition', desc: 'Identified screen title change to "Profile Creation Form"', status: 'info' },
-  { id: '3', time: '00:14', event: 'Visual Agent', type: 'UI Overlap Warning', desc: 'Detected elements overlapping on element CSS selector: #promo-banner and #input-payment', status: 'warning' },
-  { id: '4', time: '00:22', event: 'Network Tracer', type: 'Slow response API', desc: 'POST /v1/onboarding took 4200ms (threshold is 1000ms)', status: 'warning' },
-  { id: '5', time: '00:28', event: 'Crash Sensor', type: 'Uncaught Error Crash', desc: 'ReferenceError: payloadData is not defined. React fiber collapsed.', status: 'critical' }
-];
-
-const INITIAL_TEST_CASES: TestCase[] = [
-  {
-    id: 'TC-101',
-    title: 'Verify Account Setup Navigation and Redirection',
-    preconditions: 'User is authenticated and on the Landing onboarding view.',
-    steps: [
-      'Click the "Proceed to Account Setup" visual link.',
-      'Wait for transition to complete.',
-      'Observe active header labels and breadcrumbs.'
-    ],
-    expectedResult: 'Screen title successfully changes to "Profile Creation Form" within 800ms with zero layout shifts.',
-    status: 'passed',
-    severity: 'MEDIUM',
-    priority: 'P2',
-    testType: 'Functional / Flow Verification',
-    platform: 'Web Application',
-    module: 'Onboarding & Checkout Flow',
-    tags: ['Onboarding', 'Navigation', 'Redirection']
-  },
-  {
-    id: 'TC-102',
-    title: 'Ensure Ad-Banner Layout Responsiveness on Mobile Aspect Ratio',
-    preconditions: 'Dynamic promotion code active in server response.',
-    steps: [
-      'Resize view viewport to width: 375px (Mobile viewport).',
-      'Observe promo banner #promo-banner position and payment fields.'
-    ],
-    expectedResult: '#promo-banner stacks cleanly above payment inputs without overlaying the input labels.',
-    status: 'failed',
-    severity: 'HIGH',
-    priority: 'P1',
-    testType: 'UI Visual Alignment / Responsive',
-    platform: 'Web Application',
-    module: 'Promotion Visual System',
-    tags: ['CSS', 'Responsiveness', 'Banners']
-  },
-  {
-    id: 'TC-103',
-    title: 'Validate Account Payload Submission Validation',
-    preconditions: 'Required text inputs fields remain empty.',
-    steps: [
-      'Complete form using placeholder invalid inputs.',
-      'Trigger POST submission network routine.'
-    ],
-    expectedResult: 'Form blocks submission, throws immediate local verification alerts, and refrains from calling remote API.',
-    status: 'pending',
-    severity: 'CRITICAL',
-    priority: 'P0',
-    testType: 'Edge Case / Negative Validation',
-    platform: 'Web Application',
-    module: 'API Validation Shield',
-    tags: ['Security', 'API Integration', 'Form Control']
+const toArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.map(String) : [value];
+    } catch {
+      return [value];
+    }
   }
-];
+  return [];
+};
 
-const INITIAL_BUG_REPORTS: BugReport[] = [
-  {
-    id: 'BUG-401',
-    title: 'Uncaught ReferenceError: payloadData is not defined in Form Submit Handler',
-    description: 'During profile creation, clicking submit throws an unhandled reference exception resulting in client-side application crash.',
-    steps: [
-      'Navigate to Profile Creation view.',
-      'Fill required field configurations.',
-      'Click primary submit actions button.'
-    ],
-    expectedResult: 'Submission is handled gracefully and returns the client state payload to the server database.',
-    actualResult: 'Browser console throws Uncaught ReferenceError: payloadData is not defined. Application crashes to a blank white screen.',
-    severity: 'CRITICAL',
-    priority: 'P0',
-    timestamp: '00:28',
-    module: 'Form Submit Handlers',
-    githubIssueUrl: 'https://github.com/testmind/saas-platform/issues/401',
-    rcaText: 'The submittal callback refers to a non-existent parameter variable "payloadData" instead of "validatedPayloadData" which was extracted on line 122 in FormController.ts.',
-    suggestedFix: 'Replace reference to payloadData on line 144 of the FormController component with the correct destructured object reference: validatedPayloadData.'
-  },
-  {
-    id: 'BUG-402',
-    title: '#promo-banner overlaps input-payment form element on dynamic layout resizing',
-    description: 'When rendering promotional elements, the promo container breaks positioning rules and overlays text input controls.',
-    steps: [
-      'Change browser screen resolution size to 768px wide.',
-      'Look at layout segment below onboarding header.'
-    ],
-    expectedResult: 'Promo container dynamically shrinks or adapts its height using CSS flex-wrap parameters.',
-    actualResult: 'Dynamic container absolute margins overlap form field elements directly blocking mouse clicks.',
-    severity: 'HIGH',
-    priority: 'P1',
-    timestamp: '00:14',
-    module: 'Layout Components',
-    githubIssueUrl: 'https://github.com/testmind/saas-platform/issues/402',
-    rcaText: 'Absolute coordinate anchors clash during rendering processes due to missing media queries in CSS layers.',
-    suggestedFix: 'Set position to relative inside the media queries layer and specify max-width constraints on the inner wrapper of #promo-banner.'
-  }
-];
+const mapTestCase = (row: any): TestCase => ({
+  id: row.id,
+  title: row.title || 'Untitled test case',
+  preconditions: row.preconditions || 'No preconditions recorded.',
+  steps: toArray(row.steps),
+  expectedResult: row.expectedResult || row.expected_result || '',
+  actualResult: row.actualResult || row.actual_result || undefined,
+  status: row.status || 'pending',
+  severity: row.severity || 'MEDIUM',
+  priority: row.priority || 'P2',
+  testType: row.testType || row.test_type || 'Functional',
+  platform: row.platform || 'Web Application',
+  module: row.module || 'General',
+  tags: toArray(row.tags),
+});
+
+const mapBugReport = (row: any): BugReport => ({
+  id: row.id,
+  title: row.title || 'Untitled bug',
+  description: row.description || '',
+  steps: toArray(row.steps),
+  expectedResult: row.expectedResult || row.expected_result || '',
+  actualResult: row.actualResult || row.actual_result || '',
+  severity: row.severity || 'MEDIUM',
+  priority: row.priority || 'P2',
+  timestamp: row.timestamp || row.created_at || 'Database record',
+  module: row.module || 'General',
+  githubIssueUrl: row.githubIssueUrl || row.github_issue_url || undefined,
+  rcaText: row.rcaText || row.rca_text || undefined,
+  suggestedFix: row.suggestedFix || row.suggested_fix || undefined,
+});
+
+const formatTime = (seconds: number) => {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '00:00';
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.floor(seconds % 60);
+  return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`;
+};
 
 export default function App() {
   // Navigation State
   const [activeTab, setActiveTab] = useState<'dashboard' | 'upload' | 'testcases' | 'bugs' | 'integrations' | 'schemas' | 'analytics'>('dashboard');
 
   // Core Data States
-  const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>(INITIAL_TIMELINE_EVENTS);
-  const [testCases, setTestCaseData] = useState<TestCase[]>(INITIAL_TEST_CASES);
-  const [bugs, setBugReports] = useState<BugReport[]>(INITIAL_BUG_REPORTS);
+  const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
+  const [testCases, setTestCaseData] = useState<TestCase[]>([]);
+  const [bugs, setBugReports] = useState<BugReport[]>([]);
+  const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [isAppLoading, setIsAppLoading] = useState(true);
+  const [dataError, setDataError] = useState('');
   const [logInputText, setLogInputText] = useState('');
   const [uploadedVideoFile, setUploadedVideoFile] = useState<File | null>(null);
   const [uploadedVideoUrl, setUploadedVideoUrl] = useState('');
@@ -309,14 +281,28 @@ export default function App() {
   const [videoCurrentTime, setVideoCurrentTime] = useState(0);
 
   // AI Pipeline Custom Input Parameters
-  const [customAppDesc, setCustomAppDesc] = useState('An enterprise B2B SaaS e-commerce checkout page with promo codes and credit card processing validations.');
+  const [customAppDesc, setCustomAppDesc] = useState('');
   const [selectedPerspectives, setSelectedPerspectives] = useState<string[]>(['UI/UX', 'Functional', 'Edge Case']);
   const [aiGenerating, setAiGenerating] = useState(false);
   const [generationLog, setGenerationLog] = useState<string[]>([]);
+  const [isProcessingUpload, setIsProcessingUpload] = useState(false);
+  const [showAddTestCaseForm, setShowAddTestCaseForm] = useState(false);
+  const [manualTestCase, setManualTestCase] = useState({
+    title: '',
+    preconditions: '',
+    steps: '',
+    expectedResult: '',
+    severity: 'MEDIUM' as TestCase['severity'],
+    priority: 'P2' as TestCase['priority'],
+    testType: 'Manual',
+    platform: 'Web Application',
+    module: 'General',
+    tags: '',
+  });
 
   // Simulation Interactive Elements
   const [isPlayingVideo, setIsPlayingVideo] = useState(false);
-  const [videoProgress, setVideoProgress] = useState(25); // Simulated slider percentage
+  const [videoProgress, setVideoProgress] = useState(0);
   const [activeLogMsg, setActiveLogMsg] = useState('');
   const [parsedLogStatus, setParsedLogStatus] = useState<'idle' | 'parsing' | 'success' | 'failed'>('idle');
 
@@ -343,19 +329,58 @@ export default function App() {
   const [testFilterPlatform, setTestFilterPlatform] = useState('All');
   const [testFilterSeverity, setTestFilterSeverity] = useState('All');
 
-  // Automatically cycle mock video playback progress if enabled
+  const loadProjectData = async (projectId: string) => {
+    const [testCaseRows, bugRows] = await Promise.all([
+      getTestCases(projectId),
+      getBugReports(projectId),
+    ]);
+
+    setTestCaseData(testCaseRows.map(mapTestCase));
+    setBugReports(bugRows.map(mapBugReport));
+  };
+
   useEffect(() => {
-    let interval: any;
-    if (isPlayingVideo && !uploadedVideoUrl) {
-      interval = setInterval(() => {
-        setVideoProgress((prev) => {
-          if (prev >= 100) return 0;
-          return prev + 1;
-        });
-      }, 500);
+    let cancelled = false;
+
+    async function bootDynamicWorkspace() {
+      try {
+        setIsAppLoading(true);
+        setDataError('');
+        await createDevSession();
+
+        let projects = await getProjects();
+        if (projects.length === 0) {
+          const created = await createProject({
+            name: 'TestMind AI Workspace',
+            description: 'Local dynamic workspace backed by PostgreSQL.',
+            appDescription: 'Describe the product under test, then generate cases from the live backend.',
+            platformType: 'WEB_APP',
+          });
+          projects = [created];
+        }
+
+        if (cancelled) return;
+
+        const project = projects[0];
+        setActiveProject(project);
+        setCustomAppDesc(project.app_description || '');
+        await loadProjectData(project.id);
+      } catch (error) {
+        if (!cancelled) {
+          setDataError(error instanceof Error ? error.message : 'Failed to load dynamic project data.');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsAppLoading(false);
+        }
+      }
     }
-    return () => clearInterval(interval);
-  }, [isPlayingVideo, uploadedVideoUrl]);
+
+    bootDynamicWorkspace();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -365,7 +390,7 @@ export default function App() {
     };
   }, [uploadedVideoUrl]);
 
-  const handleVideoUpload = (file: File) => {
+  const handleVideoUpload = async (file: File) => {
     const acceptedTypes = ['video/mp4', 'video/webm', 'video/ogg'];
     if (!acceptedTypes.includes(file.type)) {
       setVideoUploadMessage('Unsupported file type. Please upload MP4, WEBM, or OGG video files.');
@@ -381,6 +406,41 @@ export default function App() {
     setVideoDuration(0);
     setVideoCurrentTime(0);
     setIsPlayingVideo(false);
+
+    if (!activeProject) {
+      setVideoUploadMessage('Video loaded locally. Backend project is still loading, so AI generation did not start yet.');
+      return;
+    }
+
+    try {
+      setIsProcessingUpload(true);
+      setAiGenerating(true);
+      setGenerationLog([
+        'Uploading recording to backend storage...',
+        'Preparing AI video analysis context...',
+      ]);
+
+      const videoRecord = await uploadVideo(activeProject.id, file);
+      setGenerationLog(prev => [...prev, 'Generating test cases from uploaded recording...']);
+
+      await generateTestCasesFromApi({
+        projectId: activeProject.id,
+        appDescription: customAppDesc || `Uploaded QA recording: ${file.name}`,
+        perspectives: selectedPerspectives,
+        videoId: videoRecord.id,
+      });
+
+      setGenerationLog(prev => [...prev, 'Saved video-derived test cases to PostgreSQL.']);
+      await loadProjectData(activeProject.id);
+      setActiveTab('testcases');
+      setVideoUploadMessage(`Generated test cases from ${file.name}.`);
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Failed to generate test cases from uploaded video.');
+      setVideoUploadMessage('Video loaded locally, but AI generation failed. Check backend/API settings.');
+    } finally {
+      setIsProcessingUpload(false);
+      setAiGenerating(false);
+    }
   };
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
@@ -416,20 +476,25 @@ export default function App() {
       }
       return;
     }
-    setIsPlayingVideo(prev => !prev);
+    setVideoUploadMessage('Upload a recording before starting playback.');
   };
 
   const handleVideoLoadedMetadata = () => {
     if (!videoRef.current) return;
-    setVideoDuration(videoRef.current.duration || 0);
-    setVideoCurrentTime(videoRef.current.currentTime || 0);
+    const duration = Number.isFinite(videoRef.current.duration) ? videoRef.current.duration : 0;
+    const currentTime = videoRef.current.currentTime || 0;
+    setVideoDuration(duration);
+    setVideoCurrentTime(currentTime);
+    setVideoProgress(duration ? (currentTime / duration) * 100 : 0);
   };
 
   const handleVideoTimeUpdate = () => {
-    if (!videoRef.current || !videoDuration) return;
+    if (!videoRef.current) return;
+    const duration = Number.isFinite(videoRef.current.duration) ? videoRef.current.duration : videoDuration;
     const currentTime = videoRef.current.currentTime;
     setVideoCurrentTime(currentTime);
-    setVideoProgress((currentTime / videoDuration) * 100);
+    setVideoDuration(duration || 0);
+    setVideoProgress(duration ? (currentTime / duration) * 100 : 0);
   };
 
   const handleVideoSeek = (newValue: number) => {
@@ -443,9 +508,8 @@ export default function App() {
     setMobileMenuOpen(false);
   };
 
-  // Simulate active AI prompts logging to give beautiful visual feedback
-  const handleTriggerAITestGeneration = () => {
-    if (!customAppDesc.trim()) return;
+  const handleTriggerAITestGeneration = async () => {
+    if (!customAppDesc.trim() || !activeProject) return;
     setAiGenerating(true);
     setGenerationLog([]);
     
@@ -453,59 +517,31 @@ export default function App() {
       "Initializing AI Flow Analyzer Agent...",
       "Analyzing user flows & state transitions based on product specs...",
       "Activating AI Visual Auditor Agent for responsive & alignment rules...",
-      "Querying Gemini-3-Flash for negative inputs & edge cases...",
+      "Requesting backend AI generation service...",
       "Compiling full-perspective test suite...",
-      "Injecting generated test cases into Project Library..."
+      "Saving generated test cases into PostgreSQL..."
     ];
 
-    logs.forEach((logText, index) => {
-      setTimeout(() => {
+    try {
+      for (const logText of logs.slice(0, -1)) {
         setGenerationLog(prev => [...prev, logText]);
-        if (index === logs.length - 1) {
-          // Add newly generated test cases
-          const newTCs: TestCase[] = [
-            {
-              id: `TC-GEN-${Math.floor(100 + Math.random() * 900)}`,
-              title: `Validate Checkout flow with custom dynamic inputs on ${customAppDesc.slice(0, 30)}...`,
-              preconditions: 'Database initialized. Dynamic promo system enabled.',
-              steps: [
-                'Load checkout interface.',
-                'Input invalid/unsupported coupon format code into discount field.',
-                'Verify structural component response rules.'
-              ],
-              expectedResult: 'System gracefully catches exceptions, returns clear error response without processing payment request.',
-              status: 'pending',
-              severity: 'HIGH',
-              priority: 'P1',
-              testType: 'AI Generated Flow Case',
-              platform: 'Cross-Platform App',
-              module: 'Core Transaction Engine',
-              tags: ['AI-Generated', 'Edge-Case', 'Auto-Scan']
-            },
-            {
-              id: `TC-GEN-${Math.floor(100 + Math.random() * 900)}`,
-              title: 'Verify UI Contrast Ratio compliance under dark/light theme toggle',
-              preconditions: 'System default theme set to dark dynamic modes.',
-              steps: [
-                'Toggle application theme switch twice.',
-                'Scan text labels on payment buttons against container backgrounds.'
-              ],
-              expectedResult: 'Contrast standards comply with WCAG AA standard (> 4.5:1 ratio).',
-              status: 'pending',
-              severity: 'LOW',
-              priority: 'P3',
-              testType: 'Accessibility (WCAG AA)',
-              platform: 'Web Application',
-              module: 'Accessibility UI',
-              tags: ['AI-Generated', 'Accessibility', 'Contrast']
-            }
-          ];
-          setTestCaseData(prev => [...newTCs, ...prev]);
-          setAiGenerating(false);
-          setActiveTab('testcases');
-        }
-      }, (index + 1) * 900);
-    });
+        await new Promise(resolve => setTimeout(resolve, 450));
+      }
+
+      await generateTestCasesFromApi({
+        projectId: activeProject.id,
+        appDescription: customAppDesc,
+        perspectives: selectedPerspectives,
+      });
+
+      setGenerationLog(prev => [...prev, logs[logs.length - 1]]);
+      await loadProjectData(activeProject.id);
+      setActiveTab('testcases');
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Failed to generate test cases.');
+    } finally {
+      setAiGenerating(false);
+    }
   };
 
   const handleParseLogs = () => {
@@ -600,57 +636,122 @@ test.describe('${testCase.module}', () => {
     setExecutionComment('');
   };
 
-  const submitTestExecutionResult = (passed: boolean) => {
-    if (!executingTestCase) return;
+  const submitTestExecutionResult = async (passed: boolean) => {
+    if (!executingTestCase || !activeProject) return;
 
-    // Update status locally
-    setTestCaseData(prev => prev.map(tc => {
-      if (tc.id === executingTestCase.id) {
-        return { 
-          ...tc, 
-          status: passed ? 'passed' : 'failed',
-          actualResult: executionComment || (passed ? 'Verified steps completed without issue' : 'Steps halted due to runtime mismatch')
-        };
+    try {
+      await updateTestCaseStatus(executingTestCase.id, {
+        status: passed ? 'passed' : 'failed',
+        actualResult: executionComment || (passed ? 'Verified steps completed without issue' : 'Steps halted due to runtime mismatch'),
+      });
+
+      if (!passed) {
+        const createdBug = await createBugReport({
+          projectId: activeProject.id,
+          testCaseId: executingTestCase.id,
+          title: `Failure during Test Run: ${executingTestCase.title}`,
+          description: `Executed workflow for module: ${executingTestCase.module}. Execution comment logged: ${executionComment}`,
+          steps: executingTestCase.steps,
+          expectedResult: executingTestCase.expectedResult,
+          actualResult: executionComment || 'Visual execution failed to verify state matches the expectations of this case.',
+          severity: executingTestCase.severity,
+          priority: executingTestCase.priority,
+        });
+        setActiveLogMsg(`Test Case Failed. Bug tracker record saved: ${createdBug.id}!`);
+        setTimeout(() => setActiveLogMsg(''), 5000);
+      } else {
+        setActiveLogMsg('Test Case Passed. Status saved to the database.');
+        setTimeout(() => setActiveLogMsg(''), 4000);
       }
-      return tc;
-    }));
 
-    // If test failed, automatically generate a bug report inside the log structure
-    if (!passed) {
-      const newBug: BugReport = {
-        id: `BUG-AUTO-${Math.floor(500 + Math.random() * 499)}`,
-        title: `Failure during Test Run: ${executingTestCase.title}`,
-        description: `Executed manual automated workflow for module: ${executingTestCase.module}. Execution comment logged: ${executionComment}`,
-        steps: executingTestCase.steps,
-        expectedResult: executingTestCase.expectedResult,
-        actualResult: executionComment || 'Visual execution failed to verify state matches the expectations of this case.',
-        severity: executingTestCase.severity,
-        priority: executingTestCase.priority,
-        timestamp: 'Manual Runtime Execution',
-        module: executingTestCase.module,
-        rcaText: 'Automated test suite logged user flow interruption during execution cycle.',
-        suggestedFix: 'Investigate dynamic components render constraints on the target execution steps.'
-      };
-      setBugReports(prev => [newBug, ...prev]);
-      setActiveLogMsg(`Test Case Failed. Automatic bug tracker file generated: ${newBug.id}!`);
-      setTimeout(() => setActiveLogMsg(''), 5000);
-    } else {
-      setActiveLogMsg(`Test Case Passed! Status indicators updated across Project Metrics.`);
-      setTimeout(() => setActiveLogMsg(''), 4000);
+      await loadProjectData(activeProject.id);
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Failed to save test execution result.');
+    } finally {
+      setExecutingTestCase(null);
     }
-
-    setExecutingTestCase(null);
   };
 
-  const startOAuthGithub = () => {
-    setOauthStep('authenticating');
-    setTimeout(() => {
-      setOauthStep('connected');
-      setGithubUser({
-        name: 'principal-qa-architect',
-        repos: ['testmind-ai-platform', 'e-commerce-visual-suite', 'nextjs-saas-template']
+  const handleAddManualTestCase = async () => {
+    if (!activeProject || !manualTestCase.title.trim()) return;
+
+    try {
+      await createTestCase({
+        projectId: activeProject.id,
+        title: manualTestCase.title.trim(),
+        preconditions: manualTestCase.preconditions.trim(),
+        steps: manualTestCase.steps
+          .split('\n')
+          .map(step => step.trim())
+          .filter(Boolean),
+        expectedResult: manualTestCase.expectedResult.trim(),
+        severity: manualTestCase.severity,
+        priority: manualTestCase.priority,
+        testType: manualTestCase.testType.trim() || 'Manual',
+        platform: manualTestCase.platform.trim() || 'Web Application',
+        module: manualTestCase.module.trim() || 'General',
+        tags: manualTestCase.tags
+          .split(',')
+          .map(tag => tag.trim())
+          .filter(Boolean),
       });
-    }, 1500);
+
+      await loadProjectData(activeProject.id);
+      setShowAddTestCaseForm(false);
+      setManualTestCase({
+        title: '',
+        preconditions: '',
+        steps: '',
+        expectedResult: '',
+        severity: 'MEDIUM',
+        priority: 'P2',
+        testType: 'Manual',
+        platform: 'Web Application',
+        module: 'General',
+        tags: '',
+      });
+      setActiveLogMsg('Manual test case saved.');
+      setTimeout(() => setActiveLogMsg(''), 3000);
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Failed to add test case.');
+    }
+  };
+
+  const handleDeleteTestCase = async (testCaseId: string) => {
+    if (!activeProject) return;
+
+    try {
+      await deleteTestCase(testCaseId);
+      await loadProjectData(activeProject.id);
+      setActiveLogMsg('Test case deleted.');
+      setTimeout(() => setActiveLogMsg(''), 3000);
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Failed to delete test case.');
+    }
+  };
+
+  const handleClearTestCases = async () => {
+    if (!activeProject || testCases.length === 0) return;
+    if (!window.confirm('Clear all test cases for this project?')) return;
+
+    try {
+      await clearTestCases(activeProject.id);
+      await loadProjectData(activeProject.id);
+      setActiveLogMsg('All test cases cleared.');
+      setTimeout(() => setActiveLogMsg(''), 3000);
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Failed to clear test cases.');
+    }
+  };
+
+  const startOAuthGithub = async () => {
+    try {
+      setOauthStep('authenticating');
+      window.location.href = await getGitHubAuthUrl();
+    } catch (error) {
+      setOauthStep('disconnected');
+      setDataError(error instanceof Error ? error.message : 'GitHub OAuth is not configured.');
+    }
   };
 
   const handleCreateAndPushRepo = () => {
@@ -687,6 +788,42 @@ test.describe('${testCase.module}', () => {
       return matchPlatform && matchSeverity;
     });
   }, [testCases, testFilterPlatform, testFilterSeverity]);
+
+  const bugPlatformMetrics = useMemo(() => {
+    const colors = ['bg-indigo-500', 'bg-emerald-500', 'bg-sky-500', 'bg-rose-500'];
+    const counts = bugs.reduce<Record<string, number>>((acc, bug) => {
+      const platform = testCases.find(testCase => testCase.module === bug.module)?.platform || activeProject?.platform_type || 'Unassigned';
+      acc[platform] = (acc[platform] || 0) + 1;
+      return acc;
+    }, {});
+
+    const total = Math.max(bugs.length, 1);
+    return Object.entries(counts).map(([platform, count], index) => ({
+      platform,
+      count,
+      pct: Math.round((count / total) * 100),
+      color: colors[index % colors.length],
+    }));
+  }, [activeProject?.platform_type, bugs, testCases]);
+
+  const severityMetrics = useMemo(() => {
+    const severities: TestCase['severity'][] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+    return severities.map(severity => {
+      const matching = testCases.filter(testCase => testCase.severity === severity);
+      const passed = matching.filter(testCase => testCase.status === 'passed').length;
+      return {
+        agent: `${severity} Coverage`,
+        time: `${passed}/${matching.length} passed`,
+        pct: matching.length ? Math.round((passed / matching.length) * 100) : 0,
+      };
+    });
+  }, [testCases]);
+
+  const tokenEstimate = useMemo(() => {
+    const descriptionTokens = Math.ceil(customAppDesc.length / 4);
+    const testCaseTokens = testCases.reduce((total, testCase) => total + Math.ceil(JSON.stringify(testCase).length / 4), 0);
+    return descriptionTokens + testCaseTokens;
+  }, [customAppDesc, testCases]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex overflow-hidden">
@@ -817,23 +954,22 @@ test.describe('${testCase.module}', () => {
               <Menu className="w-5 h-5" />
             </button>
             <span className="text-xs bg-indigo-500/15 text-indigo-400 font-semibold px-2.5 py-1 rounded-full border border-indigo-500/20">
-              Active Project: E-Commerce Storefront Visual Pipeline
+              Active Project: {activeProject?.name || 'Loading workspace...'}
             </span>
           </div>
           <div className="flex items-center space-x-4">
             <button 
-              onClick={() => {
-                setTestCaseData(INITIAL_TEST_CASES);
-                setBugReports(INITIAL_BUG_REPORTS);
-                setTimelineEvents(INITIAL_TIMELINE_EVENTS);
-                setActiveLogMsg("Workspace restored to default seed values.");
-                setTimeout(() => setActiveLogMsg(""), 3000);
+              onClick={async () => {
+                if (!activeProject) return;
+                await loadProjectData(activeProject.id);
+                setActiveLogMsg('Workspace refreshed from PostgreSQL.');
+                setTimeout(() => setActiveLogMsg(''), 3000);
               }}
               className="flex items-center space-x-1.5 text-xs text-slate-400 hover:text-slate-200 bg-slate-800 px-3 py-1.5 rounded border border-slate-700 transition"
-              title="Reset Sandbox state"
+              title="Refresh database state"
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              <span>Reset State</span>
+              <span>Refresh Data</span>
             </button>
             <div className="h-6 w-px bg-slate-800" />
             <span className="text-xs font-semibold text-emerald-400 flex items-center space-x-1">
@@ -848,6 +984,12 @@ test.describe('${testCase.module}', () => {
           <div className="mx-8 mt-4 p-3 bg-indigo-950/80 border border-indigo-800 text-indigo-300 rounded-lg flex items-center space-x-2 text-sm animate-bounce shadow-xl">
             <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
             <span>{activeLogMsg}</span>
+          </div>
+        )}
+
+        {(isAppLoading || dataError) && (
+          <div className={`mx-8 mt-4 p-3 border rounded-lg text-sm ${dataError ? 'bg-rose-950/70 border-rose-800 text-rose-200' : 'bg-slate-900 border-slate-800 text-slate-300'}`}>
+            {dataError || 'Loading dynamic workspace from the backend...'}
           </div>
         )}
 
@@ -1113,57 +1255,56 @@ test.describe('${testCase.module}', () => {
                     </span>
                   </div>
 
-                  {/* Mock Video Canvas Frame */}
+                  {/* Video Canvas Frame */}
                   <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden relative aspect-video flex flex-col justify-between">
-                    {/* Recording Visual overlay */}
-                    <div className="p-4 bg-gradient-to-b from-slate-950 to-transparent flex justify-between items-center z-10">
-                      <div className="flex items-center space-x-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
-                        <span className="text-xs text-white uppercase font-bold tracking-wider">Simulated Capture Onboarding_Flow.mp4</span>
+                    {uploadedVideoUrl ? (
+                      <video
+                        ref={videoRef}
+                        onLoadedMetadata={handleVideoLoadedMetadata}
+                        onTimeUpdate={handleVideoTimeUpdate}
+                        onPlay={() => setIsPlayingVideo(true)}
+                        onPause={() => setIsPlayingVideo(false)}
+                        onEnded={() => setIsPlayingVideo(false)}
+                        className="absolute inset-0 h-full w-full bg-black object-contain"
+                        src={uploadedVideoUrl}
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center space-y-3">
+                        <div className="p-4 bg-slate-900/80 rounded-full border border-slate-700">
+                          <Upload className="w-8 h-8 text-indigo-400" />
+                        </div>
+                        <p className="text-xs text-slate-400">Upload a recording to inspect its real timeline.</p>
                       </div>
-                      <span className="text-xs text-slate-400 font-mono">Duration: 00:30</span>
-                    </div>
+                    )}
 
-                    {/* Simulation graphics / animations on play state */}
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                      {isPlayingVideo ? (
-                        <div className="text-center space-y-4 relative w-full h-full">
-                          {/* Animated pointer cursor mimicking test steps */}
-                          <div 
-                            className="absolute w-6 h-6 rounded-full bg-indigo-500/40 border-2 border-indigo-400 flex items-center justify-center animate-ping"
-                            style={{ 
-                              top: `${40 + Math.sin(videoProgress / 5) * 20}%`, 
-                              left: `${30 + Math.cos(videoProgress / 5) * 20}%` 
-                            }}
-                          >
-                            <span className="w-2 h-2 rounded-full bg-indigo-500" />
-                          </div>
-
-                          <div className="absolute inset-x-0 bottom-16 bg-slate-950/80 p-2 mx-12 rounded border border-slate-800 text-center text-xs">
-                            <span className="text-slate-300 font-mono font-bold block">Active OCR State Transition:</span>
-                            <span className="text-indigo-400 text-[11px] block mt-0.5">Detecting elements: [ #promo-banner , #input-payment ]</span>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-center space-y-3">
-                          <div className="p-4 bg-slate-900/80 rounded-full border border-slate-700">
-                            <Play className="w-8 h-8 text-indigo-400 fill-indigo-400 translate-x-0.5" />
-                          </div>
-                          <p className="text-xs text-slate-400">Click playback trigger control below to simulate runtime analysis</p>
-                        </div>
-                      )}
+                    {/* Recording Visual overlay */}
+                    <div className="p-4 bg-gradient-to-b from-slate-950/95 to-transparent flex justify-between items-center z-10">
+                      <div className="flex items-center space-x-2">
+                        <span className={`w-2.5 h-2.5 rounded-full ${isPlayingVideo ? 'bg-rose-500 animate-ping' : 'bg-slate-500'}`} />
+                        <span className="text-xs text-white uppercase font-bold tracking-wider">
+                          {uploadedVideoFile?.name || 'No recording loaded'}
+                        </span>
+                      </div>
+                      <span className="text-xs text-slate-400 font-mono">Duration: {formatTime(videoDuration)}</span>
                     </div>
 
                     {/* Bottom controls panel */}
-                    <div className="p-4 bg-gradient-to-t from-slate-950 to-transparent flex flex-col space-y-3 z-10">
+                    <div className="p-4 bg-gradient-to-t from-slate-950/95 to-transparent flex flex-col space-y-3 z-10">
                       
                       {/* Video progress track line */}
                       <div className="flex items-center space-x-3">
-                        <span className="text-xs text-slate-400 font-mono">00:00</span>
-                        <div className="flex-1 bg-slate-800 h-1.5 rounded-full overflow-hidden cursor-pointer">
-                          <div className="bg-indigo-500 h-full" style={{ width: `${videoProgress}%` }} />
-                        </div>
-                        <span className="text-xs text-slate-400 font-mono">00:30</span>
+                        <span className="text-xs text-slate-400 font-mono">{formatTime(videoCurrentTime)}</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={0.1}
+                          value={videoProgress}
+                          disabled={!uploadedVideoUrl}
+                          onChange={(e) => handleVideoSeek(Number(e.target.value))}
+                          className="flex-1 accent-indigo-500 disabled:opacity-40"
+                        />
+                        <span className="text-xs text-slate-400 font-mono">{formatTime(videoDuration)}</span>
                       </div>
 
                       <div className="flex justify-between items-center">
@@ -1182,6 +1323,7 @@ test.describe('${testCase.module}', () => {
                                 videoRef.current.pause();
                               }
                               setVideoProgress(0);
+                              setVideoCurrentTime(0);
                               setIsPlayingVideo(false);
                             }}
                             className="text-slate-400 hover:text-white transition"
@@ -1191,7 +1333,7 @@ test.describe('${testCase.module}', () => {
                         </div>
 
                         <span className="text-xs font-mono text-indigo-400 bg-indigo-950 px-2 py-0.5 rounded border border-indigo-900">
-                          Timeline Segment: {Math.floor((30 * videoProgress) / 100)}s
+                          Timeline Segment: {formatTime(videoCurrentTime)}
                         </span>
                       </div>
 
@@ -1220,25 +1362,19 @@ test.describe('${testCase.module}', () => {
                     <p className="text-sm font-semibold text-white">Upload recording for analysis</p>
                     <p className="text-xs text-slate-500 mt-1">Drag and drop MP4, WEBM or OGG files here or click to choose.</p>
                     <p className="text-xs text-slate-400 mt-3">{videoUploadMessage}</p>
+                    {isProcessingUpload && (
+                      <p className="text-xs text-indigo-300 mt-2 flex items-center justify-center space-x-2">
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Uploading video and generating test cases...</span>
+                      </p>
+                    )}
                     {uploadedVideoFile && (
                       <p className="text-xs text-slate-300 mt-2">
                         Loaded: {uploadedVideoFile.name} ({(uploadedVideoFile.size / 1024 / 1024).toFixed(2)} MB)
                       </p>
                     )}
                   </div>
-                  {uploadedVideoUrl && (
-                    <div className="rounded-xl overflow-hidden border border-slate-800 mt-4">
-                      <video
-                        ref={videoRef}
-                        controls
-                        onLoadedMetadata={handleVideoLoadedMetadata}
-                        onTimeUpdate={handleVideoTimeUpdate}
-                        className="w-full max-h-[360px] bg-black"
-                        src={uploadedVideoUrl}
-                      />
-                    </div>
-                  )}
-                  {uploadedVideoUrl && (
+                  {false && uploadedVideoUrl && (
                     <div className="mt-3 space-y-3 text-xs text-slate-300">
                       <div className="flex items-center justify-between">
                         <span>{Math.floor(videoCurrentTime)}s</span>
@@ -1271,6 +1407,10 @@ test.describe('${testCase.module}', () => {
                           setUploadedVideoFile(null);
                           setUploadedVideoUrl('');
                           setVideoUploadMessage('Drag & drop or choose a video file to analyze.');
+                          setVideoDuration(0);
+                          setVideoCurrentTime(0);
+                          setVideoProgress(0);
+                          setIsPlayingVideo(false);
                         }}
                         className="mt-3 text-xs text-indigo-300 hover:text-white"
                       >
@@ -1388,7 +1528,22 @@ test.describe('${testCase.module}', () => {
                     </div>
 
                     {/* Filter controllers */}
-                    <div className="flex space-x-3">
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        onClick={() => setShowAddTestCaseForm(true)}
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3 py-1.5 rounded font-semibold transition flex items-center space-x-1.5"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Add Test Case</span>
+                      </button>
+                      <button
+                        onClick={handleClearTestCases}
+                        disabled={testCases.length === 0}
+                        className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 text-xs px-3 py-1.5 rounded font-semibold transition flex items-center space-x-1.5"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Clear TestCases</span>
+                      </button>
                       <select 
                         value={testFilterPlatform} 
                         onChange={(e) => setTestFilterPlatform(e.target.value)}
@@ -1413,6 +1568,89 @@ test.describe('${testCase.module}', () => {
                       </select>
                     </div>
                   </div>
+
+                  {showAddTestCaseForm && (
+                    <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-bold text-white">Add Manual Test Case</h4>
+                        <button
+                          onClick={() => setShowAddTestCaseForm(false)}
+                          className="text-slate-400 hover:text-white transition"
+                          aria-label="Close manual test case form"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <input
+                          value={manualTestCase.title}
+                          onChange={(e) => setManualTestCase(prev => ({ ...prev, title: e.target.value }))}
+                          placeholder="Title"
+                          className="md:col-span-2 bg-slate-900 border border-slate-800 rounded p-2 text-xs text-slate-100 focus:outline-none"
+                        />
+                        <input
+                          value={manualTestCase.preconditions}
+                          onChange={(e) => setManualTestCase(prev => ({ ...prev, preconditions: e.target.value }))}
+                          placeholder="Preconditions"
+                          className="bg-slate-900 border border-slate-800 rounded p-2 text-xs text-slate-100 focus:outline-none"
+                        />
+                        <input
+                          value={manualTestCase.expectedResult}
+                          onChange={(e) => setManualTestCase(prev => ({ ...prev, expectedResult: e.target.value }))}
+                          placeholder="Expected result"
+                          className="bg-slate-900 border border-slate-800 rounded p-2 text-xs text-slate-100 focus:outline-none"
+                        />
+                        <textarea
+                          value={manualTestCase.steps}
+                          onChange={(e) => setManualTestCase(prev => ({ ...prev, steps: e.target.value }))}
+                          placeholder="Steps, one per line"
+                          rows={4}
+                          className="md:col-span-2 bg-slate-900 border border-slate-800 rounded p-2 text-xs text-slate-100 focus:outline-none"
+                        />
+                        <select
+                          value={manualTestCase.severity}
+                          onChange={(e) => setManualTestCase(prev => ({ ...prev, severity: e.target.value as TestCase['severity'] }))}
+                          className="bg-slate-900 border border-slate-800 rounded p-2 text-xs text-slate-100 focus:outline-none"
+                        >
+                          <option value="CRITICAL">CRITICAL</option>
+                          <option value="HIGH">HIGH</option>
+                          <option value="MEDIUM">MEDIUM</option>
+                          <option value="LOW">LOW</option>
+                        </select>
+                        <select
+                          value={manualTestCase.priority}
+                          onChange={(e) => setManualTestCase(prev => ({ ...prev, priority: e.target.value as TestCase['priority'] }))}
+                          className="bg-slate-900 border border-slate-800 rounded p-2 text-xs text-slate-100 focus:outline-none"
+                        >
+                          <option value="P0">P0</option>
+                          <option value="P1">P1</option>
+                          <option value="P2">P2</option>
+                          <option value="P3">P3</option>
+                        </select>
+                        <input
+                          value={manualTestCase.module}
+                          onChange={(e) => setManualTestCase(prev => ({ ...prev, module: e.target.value }))}
+                          placeholder="Module"
+                          className="bg-slate-900 border border-slate-800 rounded p-2 text-xs text-slate-100 focus:outline-none"
+                        />
+                        <input
+                          value={manualTestCase.tags}
+                          onChange={(e) => setManualTestCase(prev => ({ ...prev, tags: e.target.value }))}
+                          placeholder="Tags, comma-separated"
+                          className="bg-slate-900 border border-slate-800 rounded p-2 text-xs text-slate-100 focus:outline-none"
+                        />
+                      </div>
+
+                      <button
+                        onClick={handleAddManualTestCase}
+                        disabled={!manualTestCase.title.trim()}
+                        className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs px-4 py-2 rounded font-semibold transition"
+                      >
+                        Save Test Case
+                      </button>
+                    </div>
+                  )}
 
                   {/* Test Cards List Grid */}
                   <div className="space-y-4">
@@ -1443,6 +1681,14 @@ test.describe('${testCase.module}', () => {
                               tc.status === 'failed' ? 'bg-rose-500' : 'bg-amber-500'
                             }`} />
                             <span className="text-xs text-slate-400 font-semibold capitalize">{tc.status}</span>
+                            <button
+                              onClick={() => handleDeleteTestCase(tc.id)}
+                              className="p-1 rounded bg-slate-900 text-slate-500 hover:text-rose-300 hover:bg-rose-950/30 transition"
+                              aria-label={`Delete test case ${tc.title}`}
+                              title="Delete test case"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </div>
 
@@ -2002,7 +2248,7 @@ test.describe('${testCase.module}', () => {
                 </div>
               </div>
 
-              {/* Graphic metrics simulation cards */}
+              {/* Graphic metrics cards */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                 
                 {/* Bug density by platform card */}
@@ -2010,12 +2256,10 @@ test.describe('${testCase.module}', () => {
                   <h4 className="font-bold text-sm text-white mb-4">Total Identified Bugs by Platform</h4>
                   
                   <div className="space-y-4">
-                    {[
-                      { platform: "Web Applications", count: 8, pct: 40, color: "bg-indigo-500" },
-                      { platform: "Mobile iOS / Android", count: 6, pct: 30, color: "bg-emerald-500" },
-                      { platform: "Video Games (Unity)", count: 4, pct: 20, color: "bg-purple-500" },
-                      { platform: "Desktop Core (Windows)", count: 2, pct: 10, color: "bg-pink-500" }
-                    ].map((item, idx) => (
+                    {bugPlatformMetrics.length === 0 && (
+                      <p className="text-xs text-slate-500">No bug records saved for this project yet.</p>
+                    )}
+                    {bugPlatformMetrics.map((item, idx) => (
                       <div key={idx} className="space-y-2">
                         <div className="flex justify-between text-xs font-semibold">
                           <span className="text-slate-300">{item.platform}</span>
@@ -2034,12 +2278,7 @@ test.describe('${testCase.module}', () => {
                   <h4 className="font-bold text-sm text-white mb-4">AI Agent Identification Speed SLAs</h4>
                   
                   <div className="space-y-4">
-                    {[
-                      { agent: "Flow Analyzer", time: "0.8s avg", pct: 95 },
-                      { agent: "UI Visual Auditor", time: "1.2s avg", pct: 90 },
-                      { agent: "Accessibility Inspector", time: "1.5s avg", pct: 88 },
-                      { agent: "Edge Case Generation", time: "2.1s avg", pct: 85 }
-                    ].map((item, idx) => (
+                    {severityMetrics.map((item, idx) => (
                       <div key={idx} className="flex justify-between items-center p-3 bg-slate-950 rounded border border-slate-850">
                         <div>
                           <p className="text-xs font-bold text-slate-200">{item.agent} Agent</p>
@@ -2060,17 +2299,17 @@ test.describe('${testCase.module}', () => {
                   <div className="space-y-4">
                     <div className="bg-slate-950 p-4 rounded border border-slate-850 text-center">
                       <p className="text-[10px] uppercase font-bold text-slate-500">Daily processed tokens count</p>
-                      <h3 className="text-3xl font-extrabold text-white mt-1">1,425,850</h3>
-                      <p className="text-[11px] text-emerald-400 mt-1">All query requests resolved successfully</p>
+                      <h3 className="text-3xl font-extrabold text-white mt-1">{tokenEstimate.toLocaleString()}</h3>
+                      <p className="text-[11px] text-emerald-400 mt-1">{testCases.length} database-backed test cases analyzed</p>
                     </div>
 
                     <div className="flex justify-between text-xs text-slate-400">
-                      <span>Monthly API budget used:</span>
-                      <span className="text-white font-bold">$244.50 / $1000.00</span>
+                      <span>Generated test cases:</span>
+                      <span className="text-white font-bold">{testCases.length}</span>
                     </div>
 
                     <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden">
-                      <div className="h-full bg-indigo-600 w-1/4" />
+                      <div className="h-full bg-indigo-600" style={{ width: `${Math.min(testCases.length * 10, 100)}%` }} />
                     </div>
                   </div>
                 </div>

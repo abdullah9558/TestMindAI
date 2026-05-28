@@ -84,3 +84,34 @@ export async function getCurrentUser(req: AuthRequest, res: Response) {
     res.status(500).json({ error: 'Failed to get user' });
   }
 }
+
+export async function createDevSession(req: Request, res: Response) {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  try {
+    const email = 'dev@testmind.ai';
+    const name = 'Local TestMind Developer';
+
+    const existing = await pool.query('SELECT id, email, name FROM users WHERE email = $1', [email]);
+    let user = existing.rows[0];
+
+    if (!user) {
+      const id = uuidv4();
+      const created = await pool.query(
+        'INSERT INTO users (id, email, name) VALUES ($1, $2, $3) RETURNING id, email, name',
+        [id, email, name]
+      );
+      user = created.rows[0];
+    }
+
+    res.json({
+      token: generateToken(user.id),
+      user,
+    });
+  } catch (error) {
+    console.error('Dev session error:', error);
+    res.status(500).json({ error: 'Failed to create development session' });
+  }
+}

@@ -31,7 +31,7 @@ export async function getBugReports(req: AuthRequest, res: Response) {
       [projectId]
     );
 
-    const bugReports = result.rows.map(row => ({
+    const bugReports = result.rows.map((row: any) => ({
       ...row,
       steps: typeof row.steps === 'string' ? JSON.parse(row.steps) : row.steps,
     }));
