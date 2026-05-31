@@ -4,6 +4,8 @@ export async function generateTestCases(data: {
   projectId: string;
   appDescription: string;
   perspectives?: string[];
+  platform?: string;
+  testCount?: number | 'Auto';
   videoId?: string;
 }) {
   return apiCall('/test-cases/generate', {

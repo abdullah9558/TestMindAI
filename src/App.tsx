@@ -5,7 +5,7 @@ import {
   CheckSquare, Copy, Hammer, Menu, ExternalLink, Layers, Award, Globe, Laptop, Smartphone,
   Gamepad2, Compass, Plus, Trash2, X
 } from 'lucide-react';
-import { createDevSession, getGitHubAuthUrl } from './api/auth';
+import { createDevSession, getGitHubAuthUrl, getCurrentUser } from './api/auth';
 import { createBugReport, getBugReports } from './api/bugs';
 import { createProject, getProjects } from './api/projects';
 import {
@@ -16,7 +16,8 @@ import {
   getTestCases,
   updateTestCaseStatus,
 } from './api/testCases';
-import { uploadVideo } from './api/integrations';
+import { uploadVideo, getGitHubRepos } from './api/integrations';
+import { setToken } from './api/client';
 
 interface TestCase {
   id: string;
@@ -283,6 +284,9 @@ export default function App() {
   // AI Pipeline Custom Input Parameters
   const [customAppDesc, setCustomAppDesc] = useState('');
   const [selectedPerspectives, setSelectedPerspectives] = useState<string[]>(['UI/UX', 'Functional', 'Edge Case']);
+  const [selectedPlatform, setSelectedPlatform] = useState('Web');
+  const [selectedTestCount, setSelectedTestCount] = useState<'5' | '10' | '20' | '30' | 'Custom' | 'Auto'>('10');
+  const [customTestCount, setCustomTestCount] = useState('12');
   const [aiGenerating, setAiGenerating] = useState(false);
   const [generationLog, setGenerationLog] = useState<string[]>([]);
   const [isProcessingUpload, setIsProcessingUpload] = useState(false);
@@ -329,6 +333,15 @@ export default function App() {
   const [testFilterPlatform, setTestFilterPlatform] = useState('All');
   const [testFilterSeverity, setTestFilterSeverity] = useState('All');
 
+  const getRequestedTestCount = () => {
+    if (selectedTestCount === 'Auto') return 'Auto';
+    if (selectedTestCount === 'Custom') {
+      const customCount = Number(customTestCount);
+      return Number.isFinite(customCount) && customCount > 0 ? customCount : 10;
+    }
+    return Number(selectedTestCount);
+  };
+
   const loadProjectData = async (projectId: string) => {
     const [testCaseRows, bugRows] = await Promise.all([
       getTestCases(projectId),
@@ -342,11 +355,44 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
 
-    async function bootDynamicWorkspace() {
+    async function initAuthAndWorkspace() {
       try {
         setIsAppLoading(true);
         setDataError('');
-        await createDevSession();
+
+        const params = new URLSearchParams(window.location.search);
+        const urlToken = params.get('token');
+
+        if (urlToken) {
+          setToken(urlToken);
+          params.delete('token');
+          params.delete('userId');
+          params.delete('email');
+          const newUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
+          window.history.replaceState({}, '', newUrl);
+        }
+
+        const existingToken = localStorage.getItem('token');
+        if (existingToken) {
+          try {
+            const user = await getCurrentUser();
+            const repos = await getGitHubRepos();
+            if (!cancelled) {
+              setGithubUser({
+                name: user.name || user.github_username || 'GitHub User',
+                repos: repos.map((repo: any) => repo.full_name || repo.name || ''),
+              });
+              setOauthStep('connected');
+            }
+          } catch (error) {
+            // If GitHub-specific auth is not available, keep the app running in dev mode.
+            console.warn('GitHub auth auto-connect failed:', error);
+          }
+        }
+
+        if (!localStorage.getItem('token')) {
+          await createDevSession();
+        }
 
         let projects = await getProjects();
         if (projects.length === 0) {
@@ -376,7 +422,7 @@ export default function App() {
       }
     }
 
-    bootDynamicWorkspace();
+    initAuthAndWorkspace();
     return () => {
       cancelled = true;
     };
@@ -427,6 +473,8 @@ export default function App() {
         projectId: activeProject.id,
         appDescription: customAppDesc || `Uploaded QA recording: ${file.name}`,
         perspectives: selectedPerspectives,
+        platform: selectedPlatform,
+        testCount: getRequestedTestCount(),
         videoId: videoRecord.id,
       });
 
@@ -532,6 +580,8 @@ export default function App() {
         projectId: activeProject.id,
         appDescription: customAppDesc,
         perspectives: selectedPerspectives,
+        platform: selectedPlatform,
+        testCount: getRequestedTestCount(),
       });
 
       setGenerationLog(prev => [...prev, logs[logs.length - 1]]);
@@ -1025,6 +1075,53 @@ test.describe('${testCase.module}', () => {
                         className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none text-slate-100 placeholder-slate-600"
                         rows={3}
                       />
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Platform</label>
+                        <div className="flex flex-wrap gap-2">
+                          {['Web', 'Desktop', 'Mobile', 'Mac', 'Tablet'].map(platform => (
+                            <button
+                              key={platform}
+                              type="button"
+                              onClick={() => setSelectedPlatform(platform)}
+                              className={`text-xs px-3 py-1.5 rounded-full border transition font-medium ${selectedPlatform === platform ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700'}`}
+                            >
+                              {platform}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Test case volume</label>
+                        <div className="flex flex-wrap gap-2">
+                          {['5', '10', '20', '30', 'Auto', 'Custom'].map(option => (
+                            <button
+                              key={option}
+                              type="button"
+                              onClick={() => setSelectedTestCount(option as typeof selectedTestCount)}
+                              className={`text-xs px-3 py-1.5 rounded-full border transition font-medium ${selectedTestCount === option ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700'}`}
+                            >
+                              {option}
+                            </button>
+                          ))}
+                        </div>
+                        {selectedTestCount === 'Custom' && (
+                          <input
+                            type="number"
+                            min={1}
+                            value={customTestCount}
+                            onChange={(e) => setCustomTestCount(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none text-slate-100"
+                            placeholder="Enter a custom count"
+                          />
+                        )}
+                        {selectedTestCount === 'Auto' && (
+                          <p className="text-[11px] text-slate-400">Auto will generate as many test cases as possible, no strict upper limit.</p>
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex flex-wrap gap-4 items-center justify-between pt-2">
