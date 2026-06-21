@@ -155,6 +155,9 @@ Each object must follow this schema exactly:
     );
 
     const responseText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    console.log('Gemini finish reason:', response.data?.candidates?.[0]?.finishReason);
+    console.log('Gemini response length:', responseText?.length);
+    console.log('Gemini response preview:', responseText?.substring(0, 300));
     if (!responseText) throw new Error('Empty Gemini response');
 
     const jsonMatch = responseText.match(/\[[\s\S]*\]/);
@@ -176,6 +179,7 @@ Each object must follow this schema exactly:
     return testCases;
   } catch (error: any) {
     console.error('Gemini API error:', error?.response?.data || error?.message);
+    console.error('Gemini raw response:', JSON.stringify(error?.response?.data, null, 2));
     return generateGenericFallback(input);
   }
 }
