@@ -42,7 +42,9 @@ export async function apiCall(endpoint: string, options: RequestOptions = {}) {
 
   if (response.status === 401) {
     clearToken();
-    window.location.href = '/';
+    const err: any = new Error('Unauthorized');
+    err.status = 401;
+    throw err;
   }
 
   if (!response.ok) {

@@ -9,7 +9,16 @@ interface AuthRequest extends Request {
 
 export async function generateTestCases(req: AuthRequest, res: Response) {
   try {
-    const { projectId, appDescription, perspectives, videoId } = req.body;
+    const { projectId, appDescription, perspectives, platform, testCount, videoId } = req.body;
+    console.log('POST /test-cases/generate body:', {
+      projectId: projectId || null,
+      appDescription: appDescription ? (appDescription.length > 200 ? `${appDescription.substring(0,200)}...` : appDescription) : null,
+      perspectives,
+      platform,
+      testCount,
+      videoId,
+      userId: req.userId || null,
+    });
 
     if (!req.userId) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -47,6 +56,8 @@ export async function generateTestCases(req: AuthRequest, res: Response) {
     const testCases = await generateTestCasesWithAI({
       appDescription,
       perspectives: perspectives || ['Functional', 'UI/UX', 'Edge Cases'],
+      platform,
+      testCount,
       videoAnalysis,
     });
 
@@ -57,8 +68,8 @@ export async function generateTestCases(req: AuthRequest, res: Response) {
       await pool.query(
         `INSERT INTO test_cases 
          (id, project_id, title, description, preconditions, steps, expected_result, 
-          severity, priority, test_type, module, tags, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+          severity, priority, test_type, platform, module, tags, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
         [
           id,
           projectId,
@@ -70,13 +81,14 @@ export async function generateTestCases(req: AuthRequest, res: Response) {
           testCase.severity,
           testCase.priority,
           testCase.testType,
+          testCase.platform || platform || 'Web',
           testCase.module,
           JSON.stringify(testCase.tags),
           req.userId,
         ]
       );
 
-      savedTestCases.push({ id, ...testCase });
+      savedTestCases.push({ id, ...testCase, platform: testCase.platform || platform || 'Web' });
     }
 
     res.json({ success: true, testCases: savedTestCases });
@@ -106,7 +118,7 @@ export async function getTestCases(req: AuthRequest, res: Response) {
 
     const result = await pool.query(
       `SELECT id, title, description, preconditions, steps, expected_result, actual_result,
-              status, severity, priority, test_type, module, tags, created_at, updated_at
+              status, severity, priority, test_type, platform, module, tags, created_at, updated_at
        FROM test_cases WHERE project_id = $1 ORDER BY created_at DESC`,
       [projectId]
     );
