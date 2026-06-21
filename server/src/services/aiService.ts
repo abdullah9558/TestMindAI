@@ -37,36 +37,102 @@ export async function generateTestCasesWithAI(input: TestCaseGenerationInput): P
     ? `Generate exactly ${input.testCount} distinct test cases.`
     : 'Generate 30-50 comprehensive test cases covering major features and edge cases.';
 
-  const prompt = `You are a senior QA engineer. Generate comprehensive, specific test cases for the application described below.
+  const prompt = `You are a principal QA architect with 15+ years experience. Your job is to produce an EXHAUSTIVE test suite from the user story or app description below. Leave no stone unturned.
 
-Application Description:
+USER STORY / APP DESCRIPTION:
 ${input.appDescription}
 
 Platform: ${input.platform || 'Not specified'}
-Test Perspectives: ${input.perspectives.join(', ')}
+Test Perspectives Requested: ${input.perspectives.join(', ')}
 ${input.videoAnalysis ? `\nObserved Behavior from Recording:\n${input.videoAnalysis}` : ''}
 
 ${countInstruction}
 
+MANDATORY COVERAGE CHECKLIST — you MUST generate test cases for EVERY applicable category:
+
+1. FUNCTIONAL
+   - Happy path (all valid inputs, expected flows)
+   - Each acceptance criterion in the user story verified independently
+   - All buttons, links, actions explicitly mentioned
+   - CRUD operations if applicable
+
+2. UI / UX
+   - Layout correctness, element visibility and alignment
+   - Responsive design (mobile, tablet, desktop)
+   - Loading states, spinners, skeleton screens
+   - Empty states (no data, first-time user)
+   - Success/error messages and toasts
+   - Placeholder text, labels, tooltips
+   - Disabled states and readonly fields
+   - Accessibility: keyboard navigation, screen reader, ARIA labels, color contrast
+
+3. VALIDATION & INPUT HANDLING
+   - Required fields left empty
+   - Min/max length boundaries (exactly at limit, one below, one above)
+   - Invalid format inputs (wrong email, special chars, SQL/script injection strings)
+   - Whitespace-only inputs
+   - Very long strings (1000+ chars)
+   - Copy-paste behavior
+   - Numeric fields: negative numbers, zero, decimals, letters
+
+4. SECURITY
+   - SQL injection attempts in all input fields
+   - XSS (script tags in inputs)
+   - CSRF protection
+   - Unauthorized access (access protected routes without auth)
+   - Privilege escalation (normal user accessing admin features)
+   - Sensitive data not exposed in URL or console
+   - Session expiry behavior
+   - Brute force / rate limiting on auth endpoints
+
+5. PERFORMANCE
+   - Page/feature load time under normal conditions
+   - Load time with slow network (3G simulation)
+   - Large dataset rendering (1000+ records)
+   - Concurrent users / simultaneous requests
+   - Memory leaks on repeated actions
+   - API response time within acceptable threshold
+
+6. EDGE CASES
+   - First time user (no existing data)
+   - Last item deleted (empty state)
+   - Simultaneous edits from two sessions
+   - Action performed during page load/transition
+   - Network drop mid-operation
+   - Browser back button after form submit
+   - Rapid repeated clicks on submit button
+   - Timeout handling
+
+7. INTEGRATION
+   - API request/response correctness
+   - Correct HTTP status codes returned
+   - Error from downstream service handled gracefully
+   - Data persists correctly after refresh
+   - Cross-feature dependencies work together
+
+8. REGRESSION
+   - Existing related features not broken by this change
+   - Navigation flows still intact
+
 RULES:
-1. Test cases MUST be based ONLY on what is described above. Do not invent features.
-2. Extract specific features, flows, and modules from the description.
-3. Generate tests for: happy paths, error handling, edge cases, validation, security, performance, and UI/UX as applicable.
-4. Each test must be concrete and actionable — not generic boilerplate.
-5. Module names must reflect actual features from the description (not generic names like "Core" or "Frontend").
+- Every test must be SPECIFIC to the user story above — no generic boilerplate
+- Steps must be concrete and executable by a human tester
+- Module names must reflect actual features from the description
+- Do not repeat the same test with minor wording changes
+- Skip categories that genuinely don't apply (e.g. no auth tests if story has no auth)
 
 Return ONLY a valid JSON array. No markdown. No explanation. No code fences.
 
 Each object must follow this schema exactly:
 {
-  "title": "Specific test case title tied to a real feature",
-  "preconditions": "Exact setup state required",
-  "steps": ["Step 1", "Step 2", "..."],
-  "expectedResult": "Concrete, verifiable outcome",
+  "title": "Specific, descriptive test case title",
+  "preconditions": "Exact system state and data setup required",
+  "steps": ["Step 1 with specific data", "Step 2", "..."],
+  "expectedResult": "Concrete, verifiable, specific outcome",
   "severity": "LOW|MEDIUM|HIGH|CRITICAL",
   "priority": "P3|P2|P1|P0",
-  "testType": "Functional|Integration|Security|Performance|UI/UX|Edge Case|Regression|Stress|Validation",
-  "module": "Specific feature module name from the app description",
+  "testType": "Functional|Integration|Security|Performance|UI/UX|Edge Case|Regression|Stress|Validation|Accessibility",
+  "module": "Specific feature module name from the user story",
   "platform": "${input.platform || 'Cross-platform'}",
   "tags": ["tag1", "tag2"]
 }`;
@@ -77,8 +143,8 @@ Each object must follow this schema exactly:
       {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
-          temperature: 0.4,
-          maxOutputTokens: 8192,
+          temperature: 0.3,
+          maxOutputTokens: 16384,
         },
       },
       {
