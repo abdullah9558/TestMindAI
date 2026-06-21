@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import pool from '../db/connection.js';
 import { createGitHubRepository, createGitHubIssue, getGitHubUserRepositories } from '../services/githubService.js';
 import { v4 as uuidv4 } from 'uuid';
+import axios from 'axios';
 
 interface AuthRequest extends Request {
   userId?: string;
@@ -104,5 +105,61 @@ export async function pushBugToGitHub(req: AuthRequest, res: Response) {
   } catch (error) {
     console.error('Error pushing bug to GitHub:', error);
     res.status(500).json({ error: 'Failed to push bug to GitHub' });
+  }
+}
+
+export async function githubOAuthInitiate(req: AuthRequest, res: Response) {
+  const clientId = process.env.GITHUB_CLIENT_ID;
+  if (!clientId) {
+    return res.status(500).json({ error: 'GitHub OAuth not configured' });
+  }
+  const scope = 'repo user';
+  const state = req.userId || 'anonymous';
+  const redirectUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&scope=${encodeURIComponent(scope)}&state=${state}`;
+  res.json({ url: redirectUrl });
+}
+
+export async function githubOAuthCallback(req: Request, res: Response) {
+  const { code, state: userId } = req.query;
+  const clientId = process.env.GITHUB_CLIENT_ID;
+  const clientSecret = process.env.GITHUB_CLIENT_SECRET;
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+  if (!code || !clientId || !clientSecret) {
+    return res.redirect(`${frontendUrl}?github_error=missing_params`);
+  }
+
+  try {
+    // Exchange code for access token
+    const tokenRes = await axios.post(
+      'https://github.com/login/oauth/access_token',
+      { client_id: clientId, client_secret: clientSecret, code },
+      { headers: { Accept: 'application/json' } }
+    );
+
+    const accessToken = tokenRes.data.access_token;
+    if (!accessToken) {
+      return res.redirect(`${frontendUrl}?github_error=no_token`);
+    }
+
+    // Get GitHub user info
+    const userRes = await axios.get('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    const githubUsername = userRes.data.login;
+
+    // Save token to user record
+    if (userId && userId !== 'anonymous') {
+      await pool.query(
+        'UPDATE users SET github_access_token = $1, github_username = $2 WHERE id = $3',
+        [accessToken, githubUsername, userId]
+      );
+    }
+
+    res.redirect(`${frontendUrl}?github_connected=true&github_user=${githubUsername}`);
+  } catch (error) {
+    console.error('GitHub OAuth callback error:', error);
+    res.redirect(`${frontendUrl}?github_error=oauth_failed`);
   }
 }
