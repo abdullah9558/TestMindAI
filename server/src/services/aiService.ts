@@ -139,7 +139,7 @@ Each object must follow this schema exactly:
 
   try {
     const response = await axios.post(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
       {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
@@ -207,7 +207,7 @@ export async function analyzeVideoWithAI(videoPath: string): Promise<string> {
     const mimeType = mimeMap[ext] || 'video/mp4';
 
     const response = await axios.post(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
       {
         contents: [{
           parts: [
