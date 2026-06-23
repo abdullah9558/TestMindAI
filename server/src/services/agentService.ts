@@ -1,3 +1,25 @@
+
+function mapSeverity(s: string): 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' {
+  const v = (s || '').toLowerCase();
+  if (v === 'critical') return 'CRITICAL';
+  if (v === 'major' || v === 'high') return 'HIGH';
+  if (v === 'minor' || v === 'low') return 'LOW';
+  return 'MEDIUM';
+}
+
+function mapPriority(p: string): 'P0' | 'P1' | 'P2' | 'P3' {
+  const v = (p || '').toLowerCase();
+  if (v === 'high' || v === 'p0') return 'P0';
+  if (v === 'p1') return 'P1';
+  if (v === 'low' || v === 'p3') return 'P3';
+  return 'P2';
+}
+
+function extractModule(title: string): string {
+  const parts = title.split(/[-–:]/);
+  return parts.length > 1 ? parts[0].trim() : 'General';
+}
+
 import Groq from 'groq-sdk';
 
 interface TestCaseGenerationInput {
@@ -21,35 +43,51 @@ interface GeneratedTestCase {
   tags: string[];
 }
 
-const SYSTEM_PROMPT = `You are a principal QA architect agent. Your sole job is to generate exhaustive, specific, executable test cases from a user story.
+const SYSTEM_PROMPT = `You are TestMind AI, an Enterprise QA Architect and Multi-Agent Testing System.
 
-You think step by step:
-1. Parse the user story — extract every feature, flow, actor, and constraint
-2. Identify all testable behaviors per feature
-3. For each behavior, generate test cases across ALL applicable dimensions:
-   - Functional (happy path, each acceptance criterion)
-   - UI/UX (layout, states, responsive, empty states, loading)
-   - Validation (required fields, boundary values, invalid formats, XSS/SQLi strings)
-   - Security (auth bypass, privilege escalation, CSRF, sensitive data exposure)
-   - Performance (load time, large data, concurrent requests)
-   - Edge Cases (network drop, rapid clicks, empty state, back button, session expiry)
-   - Integration (API correctness, data persistence, cross-feature)
-   - Accessibility (keyboard nav, ARIA, contrast)
-4. Output ONLY a raw JSON array — no markdown, no explanation, no code fences
+Internally behave as a team of specialized QA experts: Business Analyst, QA Architect, Manual Tester, Automation Engineer, API Tester, Security Tester, Performance Engineer, Database Tester, Accessibility Specialist, UI/UX Tester.
 
-Each test case object schema:
+STEP 1 - REQUIREMENT ANALYSIS: Extract all functional requirements, user roles, permissions, business rules, input/output fields, workflows, state transitions, dependencies, API interactions, DB operations, security requirements, performance requirements, validation rules, error conditions, edge cases, and implied requirements.
+
+STEP 2 - TEST DESIGN: Generate exhaustive test cases covering:
+- Functional: happy paths, alternate paths, negative scenarios, business rules, CRUD, RBAC
+- Validation: required/optional fields, data types, length, format, BVA, equivalence partitioning
+- API: request/response validation, auth, headers, query params, pagination, sorting, filtering, rate limiting, all HTTP status codes (200/201/204/400/401/403/404/405/409/422/429/500/502/503/504)
+- Security: auth, authorization, session management, JWT, token expiry, privilege escalation, broken access control, IDOR, SQLi, NoSQLi, XSS, CSRF, file upload, sensitive data exposure
+- UI: layout, alignment, responsiveness, navigation, error messages, form validation, browser/mobile compatibility
+- Database: data persistence, integrity, duplicates, update/delete, transactions, audit logging
+- Performance: load, stress, spike, volume, concurrency
+- Accessibility: keyboard nav, screen reader, focus management, color contrast, WCAG
+- Edge Cases: duplicate actions, session expiry, network interruptions, concurrent updates, race conditions
+
+STEP 3 - COVERAGE AUDIT: Re-read the requirement. Find missing scenarios, rules, validations, security gaps, API gaps, accessibility gaps. Generate additional test cases for anything missed.
+
+OUTPUT: Return ONLY valid JSON in this exact format:
 {
-  "title": "specific title tied to real feature",
-  "preconditions": "exact setup required",
-  "steps": ["concrete step with specific data"],
-  "expectedResult": "verifiable outcome",
-  "severity": "LOW|MEDIUM|HIGH|CRITICAL",
-  "priority": "P3|P2|P1|P0",
-  "testType": "Functional|UI/UX|Validation|Security|Performance|Edge Case|Integration|Accessibility|Regression",
-  "module": "exact feature module from user story",
-  "platform": "platform",
-  "tags": ["tag"]
-}`;
+  "coverageSummary": {
+    "requirementsIdentified": <number>,
+    "businessRulesIdentified": <number>,
+    "testCasesGenerated": <number>,
+    "coverageAssessment": "High | Medium | Low"
+  },
+  "testCases": [
+    {
+      "id": "TC-001",
+      "title": "",
+      "category": "",
+      "priority": "High | Medium | Low",
+      "severity": "Critical | Major | Minor",
+      "preconditions": [],
+      "testData": [],
+      "steps": [],
+      "expectedResult": ""
+    }
+  ],
+  "coverageGaps": [],
+  "assumptions": []
+}
+
+RULES: Generate as many test cases as needed. Never stop early. No duplicates. No summaries. JSON only.`;
 
 export async function runTestCaseAgent(input: TestCaseGenerationInput): Promise<GeneratedTestCase[]> {
   const apiKey = process.env.GROQ_API_KEY;
@@ -63,16 +101,23 @@ export async function runTestCaseAgent(input: TestCaseGenerationInput): Promise<
     ? `Generate exactly ${input.testCount} test cases. Pick the highest value ones.`
     : 'Generate 50-80 test cases.';
 
-  const userMessage = `USER STORY:
-${input.appDescription}
+  const metadata = {
+    projectType: input.platform === 'Mobile' ? 'Mobile Application' : 'Web Application',
+    requirementType: 'User Story',
+    applicationDomain: 'SaaS',
+    testDepth: 'Exhaustive',
+    platform: input.platform || 'Web',
+    perspectives: input.perspectives,
+    includeApiTests: true,
+    includeSecurityTests: true,
+    includePerformanceTests: true,
+    includeAccessibilityTests: true,
+    targetTestCount: input.testCount,
+    videoAnalysis: input.videoAnalysis || null,
+    requirement: input.appDescription,
+  };
 
-Platform: ${input.platform || 'Web'}
-Perspectives: ${input.perspectives.join(', ')}
-${input.videoAnalysis ? `\nScreen Recording Observations:\n${input.videoAnalysis}` : ''}
-
-${countInstruction}
-
-Think through every feature, every flow, every edge case. Then output the JSON array.`;
+  const userMessage = JSON.stringify(metadata, null, 2);
 
   // Agent loop — up to 3 attempts with self-correction
   let attempts = 0;

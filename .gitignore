@@ -23,7 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 -e 
-.env
-.env.local
 server/.env
 server/.env.local
+config.bat
