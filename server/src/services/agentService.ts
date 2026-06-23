@@ -133,3 +133,47 @@ Think through every feature, every flow, every edge case. Then output the JSON a
 
   throw new Error('Agent failed to produce valid JSON after 3 attempts');
 }
+
+export async function generateTestScript(
+  testCase: {
+    title: string;
+    preconditions: string;
+    steps: string[];
+    expectedResult: string;
+    module: string;
+    tags?: string[];
+  },
+  language: 'Playwright' | 'Cypress' | 'Selenium'
+): Promise<string> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) throw new Error('GROQ_API_KEY not set');
+
+  const groq = new Groq({ apiKey });
+
+  const response = await groq.chat.completions.create({
+    model: 'llama-3.3-70b-versatile',
+    messages: [
+      {
+        role: 'system',
+        content: `You are a senior test automation engineer. Generate a complete, runnable ${language} test script. Use realistic selectors based on context. Output ONLY the code, no explanation, no markdown fences.`
+      },
+      {
+        role: 'user',
+        content: `Generate a ${language} test script for this test case:
+
+Title: ${testCase.title}
+Module: ${testCase.module}
+Preconditions: ${testCase.preconditions}
+Steps:
+${testCase.steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+Expected Result: ${testCase.expectedResult}
+
+Write complete, working ${language} code with realistic selectors inferred from the steps.`
+      }
+    ],
+    temperature: 0.2,
+    max_tokens: 2000,
+  });
+
+  return response.choices[0]?.message?.content || '';
+}

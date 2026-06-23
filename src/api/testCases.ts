@@ -60,3 +60,14 @@ export async function updateTestCaseStatus(
     body: JSON.stringify(data),
   });
 }
+
+export async function generateScriptAPI(testCase: object, language: string, token: string): Promise<string> {
+  const res = await fetch(`${import.meta.env.VITE_API_URL}/test-cases/generate-script`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ testCase, language }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Script generation failed');
+  return data.script;
+}

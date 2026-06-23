@@ -15,6 +15,7 @@ import {
   generateTestCases as generateTestCasesFromApi,
   getTestCases,
   updateTestCaseStatus,
+  generateScriptAPI,
 } from './api/testCases';
 import { uploadVideo, getGitHubRepos } from './api/integrations';
 import { setToken } from './api/client';
@@ -627,64 +628,17 @@ export default function App() {
     }, 1200);
   };
 
-  const handleGenerateScript = (testCase: TestCase, language: 'Playwright' | 'Cypress' | 'Selenium') => {
+  const handleGenerateScript = async (testCase: TestCase, language: 'Playwright' | 'Cypress' | 'Selenium') => {
     setScriptTargetCase(testCase);
     setSelectedScriptType(language);
-    
-    let codeTemplate = '';
-    const formattedTitle = testCase.title.replace(/'/g, "\\'");
-    
-    if (language === 'Playwright') {
-      codeTemplate = `import { test, expect } from '@playwright/test';
-
-test.describe('${testCase.module}', () => {
-  // Preconditions: ${testCase.preconditions}
-  test('${formattedTitle}', async ({ page }) => {
-    // Step 1: ${testCase.steps[0] || 'Navigate to action area'}
-    await page.goto('/target-flow');
-    
-    ${testCase.steps[1] ? `// Step 2: ${testCase.steps[1]}\n    await page.click('#action-trigger');` : ''}
-    ${testCase.steps[2] ? `// Step 3: ${testCase.steps[2]}\n    await page.waitForTimeout(1000);` : ''}
-
-    // Expected Result: ${testCase.expectedResult}
-    const stateHeader = page.locator('h1.title');
-    await expect(stateHeader).toBeVisible();
-  });
-});`;
-    } else if (language === 'Cypress') {
-      codeTemplate = `describe('${testCase.module}', () => {
-  beforeEach(() => {
-    // Preconditions: ${testCase.preconditions}
-    cy.visit('/target-flow');
-  });
-
-  it('${formattedTitle}', () => {
-    // ${testCase.steps.join(' -> ')}
-    cy.get('#action-trigger').click();
-    
-    // Expected: ${testCase.expectedResult}
-    cy.url().should('include', '/profile');
-  });
-});`;
-    } else {
-      codeTemplate = `const { Builder, By, until } = require('selenium-webdriver');
-
-// Preconditions: ${testCase.preconditions}
-(async function executeTest() {
-  let driver = await new Builder().forBrowser('chrome').build();
-  try {
-    await driver.get('http://localhost:3000/onboarding');
-    // Steps: ${testCase.steps.join(', ')}
-    await driver.findElement(By.id('action-trigger')).click();
-    
-    // Expected: ${testCase.expectedResult}
-    await driver.wait(until.titleIs('Profile Creation Form'), 1000);
-  } finally {
-    await driver.quit();
-  }
-})();`;
+    setGeneratedScriptCode('// Generating script with AI...');
+    try {
+      const token = localStorage.getItem('token') || '';
+      const script = await generateScriptAPI(testCase, language, token);
+      setGeneratedScriptCode(script);
+    } catch (err: any) {
+      setGeneratedScriptCode(`// Error generating script: ${err.message}`);
     }
-    setGeneratedScriptCode(codeTemplate);
   };
 
   const startTestCaseExecution = (testCase: TestCase) => {

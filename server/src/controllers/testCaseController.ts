@@ -284,3 +284,18 @@ export async function updateTestCaseStatus(req: AuthRequest, res: Response) {
     res.status(500).json({ error: 'Failed to update test case' });
   }
 }
+
+export async function generateScript(req: AuthRequest, res: Response) {
+  try {
+    const { testCase, language } = req.body;
+    if (!testCase || !language) {
+      return res.status(400).json({ error: 'testCase and language required' });
+    }
+    const { generateTestScript } = await import('../services/agentService.js');
+    const script = await generateTestScript(testCase, language);
+    res.json({ script });
+  } catch (error: any) {
+    console.error('Script generation error:', error);
+    res.status(500).json({ error: error.message });
+  }
+}
