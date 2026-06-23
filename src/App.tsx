@@ -261,7 +261,7 @@ const formatTime = (seconds: number) => {
 
 export default function App() {
   // Navigation State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'upload' | 'testcases' | 'bugs' | 'integrations' | 'schemas' | 'analytics'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'upload' | 'testcases' | 'bugs' | 'integrations' | 'analytics'>('dashboard');
 
   // Core Data States
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
@@ -551,7 +551,7 @@ export default function App() {
     setVideoProgress(newValue);
   };
 
-  const navigateToTab = (tab: 'dashboard' | 'upload' | 'testcases' | 'bugs' | 'integrations' | 'schemas' | 'analytics') => {
+  const navigateToTab = (tab: 'dashboard' | 'upload' | 'testcases' | 'bugs' | 'integrations' | 'analytics') => {
     setActiveTab(tab);
     setMobileMenuOpen(false);
   };
@@ -954,14 +954,6 @@ test.describe('${testCase.module}', () => {
             >
               <GitBranch className="w-4.5 h-4.5" />
               <span>GitHub & Integrations</span>
-            </button>
-
-            <button 
-              onClick={() => navigateToTab('schemas')} 
-              className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${activeTab === 'schemas' ? 'bg-indigo-600/20 text-indigo-400 border-l-4 border-indigo-500' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
-            >
-              <Database className="w-4.5 h-4.5" />
-              <span>System Codebases</span>
             </button>
 
             <button 
@@ -2255,92 +2247,6 @@ test.describe('${testCase.module}', () => {
           )}
 
           {/* ==================== 6. CODEBASE VIEW ==================== */}
-          {activeTab === 'schemas' && (
-            <div className="space-y-8 animate-fadeIn">
-              
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                  <h3 className="text-lg font-bold text-white">Platform System Schemas & Configs</h3>
-                  <p className="text-xs text-slate-400">Review production configurations, database designs, and pipeline templates used to power TestMind AI</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-                
-                {/* Column: Prisma Schema Code */}
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-indigo-400 font-bold uppercase tracking-wider flex items-center space-x-1.5">
-                      <Database className="w-4 h-4" />
-                      <span>Prisma Database Schema</span>
-                    </span>
-                    <button 
-                      onClick={() => {
-                        navigator.clipboard.writeText(PRISMA_SCHEMA_RAW);
-                        setActiveLogMsg("Prisma schema copied successfully!");
-                        setTimeout(() => setActiveLogMsg(""), 3000);
-                      }}
-                      className="p-1 text-slate-400 hover:text-white transition"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                  <pre className="bg-slate-950 text-[10px] font-mono p-4 rounded-lg border border-slate-850 overflow-y-auto h-96 text-slate-300 leading-relaxed">
-                    {PRISMA_SCHEMA_RAW}
-                  </pre>
-                </div>
-
-                {/* Column: Docker Config */}
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-indigo-400 font-bold uppercase tracking-wider flex items-center space-x-1.5">
-                      <Layers className="w-4 h-4" />
-                      <span>Dockerfile Orchestration</span>
-                    </span>
-                    <button 
-                      onClick={() => {
-                        navigator.clipboard.writeText(DOCKER_FILE_RAW);
-                        setActiveLogMsg("Dockerfile configuration copied!");
-                        setTimeout(() => setActiveLogMsg(""), 3000);
-                      }}
-                      className="p-1 text-slate-400 hover:text-white transition"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                  <pre className="bg-slate-950 text-[10px] font-mono p-4 rounded-lg border border-slate-850 overflow-y-auto h-96 text-slate-300 leading-relaxed">
-                    {DOCKER_FILE_RAW}
-                  </pre>
-                </div>
-
-                {/* Column: GitHub Actions CI Build Config */}
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-indigo-400 font-bold uppercase tracking-wider flex items-center space-x-1.5">
-                      <GitPullRequest className="w-4 h-4" />
-                      <span>GitHub CI Actions Build</span>
-                    </span>
-                    <button 
-                      onClick={() => {
-                        navigator.clipboard.writeText(GH_ACTION_RAW);
-                        setActiveLogMsg("CI Action workflow copied!");
-                        setTimeout(() => setActiveLogMsg(""), 3000);
-                      }}
-                      className="p-1 text-slate-400 hover:text-white transition"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                  <pre className="bg-slate-950 text-[10px] font-mono p-4 rounded-lg border border-slate-850 overflow-y-auto h-96 text-slate-300 leading-relaxed">
-                    {GH_ACTION_RAW}
-                  </pre>
-                </div>
-
-              </div>
-
-            </div>
-          )}
-
           {/* ==================== 7. ANALYTICS AND METRICS VIEW ==================== */}
           {activeTab === 'analytics' && (
             <div className="space-y-8 animate-fadeIn">
