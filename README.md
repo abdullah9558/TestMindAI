@@ -1,5 +1,9 @@
 # TestMind AI
 
+[![CI](https://github.com/abdullah9558/TestMindAI/actions/workflows/ci.yml/badge.svg)](https://github.com/abdullah9558/TestMindAI/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-7c3aed.svg)](LICENSE)
+[![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-06b6d4.svg)](package.json)
+
 <p align="center">
   <img src="public/testmind-logo-v4.png" alt="TestMind AI logo" width="150" />
 </p>
@@ -7,6 +11,18 @@
 TestMind AI is an AI-assisted quality engineering workspace for turning user stories, product descriptions, telemetry, and screen recordings into structured test coverage. It combines test-case generation, test management, automation starter scripts, bug tracking, user profiles, and GitHub publishing in one responsive web application.
 
 The project is currently a functional full-stack MVP. It is suitable for local development, demonstrations, and controlled pilot use. Review the [Current limitations](#current-limitations-and-production-gaps) section before treating it as a production deployment.
+
+![TestMind AI dashboard](public/dashboard-preview.png)
+
+<details>
+  <summary>View recording-analysis workspace</summary>
+  <br />
+  <img src="public/analyze-recording-preview.png" alt="TestMind AI recording analysis workspace" />
+</details>
+
+## Why TestMind AI?
+
+Traditional QA planning is slow to maintain across long user stories, visual workflows, automation frameworks, and engineering tools. TestMind AI keeps those activities connected: one requirement or recording can become understandable test coverage, editable automation starters, execution status, bug reports, and version-controlled GitHub assets.
 
 ## Contents
 
@@ -176,13 +192,7 @@ npm install
 cd ..
 ```
 
-### 4. Optional: install the combined development runner
-
-The root `dev:full` command references `concurrently`, but that package is not currently declared in `package.json`. Either run the two services in separate terminals or install it locally:
-
-```bash
-npm install --save-dev concurrently
-```
+The combined development runner is included in the root development dependencies.
 
 ## Configuration
 
@@ -206,6 +216,7 @@ DB_NAME=testmind_ai
 # Authentication
 JWT_SECRET=replace_with_a_long_random_secret
 JWT_EXPIRES_IN=7d
+TOKEN_ENCRYPTION_KEY=replace_with_another_long_random_secret
 
 # AI providers
 GROQ_API_KEY=
@@ -222,6 +233,8 @@ GITHUB_REDIRECT_URI=http://localhost:5000/api/integrations/github/callback
 
 # Upload limit in bytes; approximately 95 MB
 MAX_FILE_SIZE=95000000
+API_RATE_LIMIT=300
+AI_RATE_LIMIT=30
 ```
 
 Generate a strong JWT secret with Node:
@@ -263,7 +276,7 @@ The backend currently creates these tables:
 - `timeline_events`
 - `github_repositories`
 
-The schema is initialized from `server/src/db/schema.ts`. A package script named `npm run migrate` exists in the backend, but its referenced `src/db/migrate.ts` file is currently missing. Do not use that command until a migration runner is implemented.
+The schema is initialized from `server/src/db/schema.ts`. You can also run it explicitly with `npm run migrate --prefix server`.
 
 ### DBeaver connection example
 
@@ -346,7 +359,7 @@ The `/TestMindAI/` path comes from the Vite `base` setting used for GitHub Pages
 
 ### Combined command
 
-After installing `concurrently`:
+The repository includes `concurrently`, so both services can be started with:
 
 ```bash
 npm run dev:full
@@ -364,9 +377,12 @@ Start Vite with `--host 0.0.0.0`, set `FRONTEND_URL` and `VITE_API_URL` to addre
 |---|---|
 | `npm run dev` | Start Vite development server |
 | `npm run dev:server` | Start the backend from the root |
-| `npm run dev:full` | Start both services; requires `concurrently` |
+| `npm run dev:full` | Start both services |
 | `npm run build` | Type-check and build the frontend |
 | `npm run build:server` | Build the backend |
+| `npm run lint` | Run frontend ESLint checks |
+| `npm test` | Run backend unit tests |
+| `npm run check` | Run lint, tests, and both builds |
 | `npm run preview` | Preview the frontend production build |
 | `npm run deploy` | Publish `dist` through `gh-pages` |
 
@@ -377,7 +393,7 @@ Start Vite with `--host 0.0.0.0`, set `FRONTEND_URL` and `VITE_API_URL` to addre
 | `npm run dev` | Run the API with `tsx watch` |
 | `npm run build` | Compile TypeScript to `server/dist` |
 | `npm start` | Run the compiled backend |
-| `npm run migrate` | Currently unavailable because the migration entry file is missing |
+| `npm run migrate` | Initialize or update the current database schema |
 
 ## Building for production
 
@@ -510,22 +526,18 @@ Selenium also requires a compatible browser installation. Modern Selenium Manage
 
 ## Current limitations and production gaps
 
-The following work is still missing or incomplete:
+The following production work remains:
 
-1. **No automated application test suite.** The repository does not currently contain unit, integration, or end-to-end tests for TestMind itself.
-2. **No working database migration command.** Schema creation runs automatically at startup, but `server/src/db/migrate.ts` is absent.
-3. **Missing `concurrently` dependency.** Install it before using `npm run dev:full`, or run two terminals.
-4. **Local upload storage.** Recordings are saved under `server/uploads`; they will be lost on ephemeral hosting and are not suitable for multi-instance deployment.
-5. **Synchronous video processing.** Videos are read and sent inline to Gemini. Large recordings can be slow or exceed provider/request limits. A production system should use object storage, queues, background workers, and progress tracking.
-6. **AI output is probabilistic.** Generated tests require human review. Video grounding reduces invention but cannot guarantee perfect visual interpretation.
-7. **Automation locators require user input.** Generated scripts cannot run against an unknown product until the locator map and target URL are completed.
-8. **GitHub tokens are stored in PostgreSQL.** Production should encrypt tokens at rest or use a dedicated secret/token vault.
-9. **Development authentication is not production authentication.** The dev-session endpoint is convenient locally and disabled when `NODE_ENV=production`; production requires the OAuth flow or another complete sign-in system.
-10. **No rate limiting or job queue.** Expensive AI and upload endpoints should be protected before public deployment.
-11. **No current CI pipeline for this repository.** Add build, lint, test, dependency-audit, and migration checks.
-12. **Deployment is split.** `gh-pages` deploys only the static frontend. It does not deploy Express, PostgreSQL, uploaded files, or environment secrets.
-13. **No committed environment template.** Create and maintain a sanitized `server/.env.example` before onboarding outside contributors.
-14. **Provider model names can expire.** Groq and Gemini model values must be updated as provider availability changes.
+1. **Limited automated coverage.** Initial automation-generation unit tests and CI are included, but broader API, database, UI, and end-to-end coverage is still needed.
+2. **Local upload storage.** Recordings are saved under `server/uploads`; they will be lost on ephemeral hosting and are not suitable for multi-instance deployment.
+3. **Synchronous video processing.** Videos are read and sent inline to Gemini. Production should use object storage, queues, background workers, and progress tracking.
+4. **AI output is probabilistic.** Generated tests require human review. Video grounding reduces invention but cannot guarantee perfect interpretation.
+5. **Automation locators require user input.** Generated scripts cannot run against an unknown product until the locator map and target URL are completed.
+6. **Token encryption requires configuration.** Set `TOKEN_ENCRYPTION_KEY` in production; a dedicated secret vault remains preferable for larger deployments.
+7. **Development authentication is not production authentication.** The dev-session endpoint is disabled in production; production requires GitHub OAuth or another complete sign-in system.
+8. **No background job queue.** Rate limits protect expensive endpoints, but durable queueing and retry management are still needed.
+9. **Deployment is split.** `gh-pages` deploys only the frontend and does not deploy Express, PostgreSQL, uploads, or secrets.
+10. **Provider model names can expire.** Update Groq and Gemini model values as provider availability changes.
 
 ## Troubleshooting
 
@@ -540,11 +552,10 @@ node --version
 ### `concurrently` is not recognized
 
 ```bash
-npm install --save-dev concurrently
 npm run dev:full
 ```
 
-Or run frontend and backend in separate terminals.
+If the command is unavailable, run `npm install` from the repository root. You can also run the frontend and backend in separate terminals.
 
 ### Backend reports `ECONNREFUSED`
 
@@ -624,4 +635,4 @@ npm run build:server
 
 ## License
 
-No license file is currently included. Until a license is added, standard copyright rules apply and reuse rights are not automatically granted.
+Licensed under the [MIT License](LICENSE).

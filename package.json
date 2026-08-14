@@ -1,7 +1,10 @@
 {
   "name": "testmind-ai",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +12,9 @@
     "dev:server": "cd server && npm run dev",
     "build": "tsc -b && vite build",
     "build:server": "cd server && npm run build",
+    "lint": "eslint src",
+    "test": "npm run test --prefix server",
+    "check": "npm run lint && npm run test && npm run build && npm run build:server",
     "preview": "vite preview",
     "deploy": "gh-pages -d dist",
     "server": "cd server && npm run dev"
@@ -21,11 +27,13 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@rolldown/binding-win32-x64-msvc": "^1.2.4",
     "@types/node": "^24.12.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
     "autoprefixer": "^10.5.0",
+    "concurrently": "^10.0.4",
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",

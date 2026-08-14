@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import path from 'path';
@@ -19,6 +21,8 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+app.disable('x-powered-by');
+if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 const allowedOrigins = new Set([
   process.env.FRONTEND_URL,
   'http://localhost:5173',
@@ -26,6 +30,7 @@ const allowedOrigins = new Set([
 ].filter(Boolean));
 
 // Middleware
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({
   origin(origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) {
     if (!origin || allowedOrigins.has(origin)) {
@@ -40,6 +45,26 @@ app.use(cors({
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.API_RATE_LIMIT || 300),
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please try again shortly.' },
+});
+const aiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.AI_RATE_LIMIT || 30),
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'AI request limit reached. Please wait before trying again.' },
+});
+
+app.use('/api', apiLimiter);
+app.use('/api/test-cases/generate', aiLimiter);
+app.use('/api/integrations/parse-telemetry', aiLimiter);
+app.use('/api/integrations/:projectId/upload-video', aiLimiter);
 
 // Serve uploaded files
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));

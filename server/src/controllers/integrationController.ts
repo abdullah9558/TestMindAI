@@ -3,12 +3,29 @@ import pool from '../db/connection.js';
 import { createGitHubBranch, createGitHubRepository, createGitHubIssue, createGitHubPullRequest, getGitHubRepository, getGitHubUser, getGitHubUserRepositories, putGitHubFile, revokeGitHubGrant } from '../services/githubService.js';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
+import fs from 'node:fs';
 import { generateToken, verifyToken } from '../services/authService.js';
 import { generateAutomationFiles } from '../services/automationService.js';
+import { decryptToken, encryptToken } from '../services/tokenCrypto.js';
 
 interface AuthRequest extends Request {
   userId?: string;
   file?: Express.Multer.File;
+}
+
+function hasSupportedVideoSignature(filePath: string): boolean {
+  const descriptor = fs.openSync(filePath, 'r');
+  try {
+    const header = Buffer.alloc(16);
+    fs.readSync(descriptor, header, 0, header.length, 0);
+    const ascii = header.toString('ascii');
+    return ascii.slice(4, 8) === 'ftyp'
+      || header.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))
+      || ascii.slice(0, 4) === 'OggS'
+      || (ascii.slice(0, 4) === 'RIFF' && ascii.slice(8, 12) === 'AVI ');
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }
 
 export async function uploadVideo(req: AuthRequest, res: Response) {
@@ -21,6 +38,11 @@ export async function uploadVideo(req: AuthRequest, res: Response) {
 
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    if (!hasSupportedVideoSignature(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+      return res.status(415).json({ error: 'The uploaded file is not a supported video format.' });
     }
 
     const id = uuidv4();
@@ -54,7 +76,7 @@ export async function getGitHubRepos(req: AuthRequest, res: Response) {
       return res.status(401).json({ error: 'GitHub not connected' });
     }
 
-    const repos = await getGitHubUserRepositories(userResult.rows[0].github_access_token);
+    const repos = await getGitHubUserRepositories(decryptToken(userResult.rows[0].github_access_token));
     res.json(repos);
   } catch (error) {
     console.error('Error fetching GitHub repos:', error);
@@ -92,7 +114,7 @@ export async function pushBugToGitHub(req: AuthRequest, res: Response) {
     const [owner, repository] = String(repoName).split('/');
     if (!owner || !repository) return res.status(400).json({ error: 'Select a valid owner/repository.' });
     const gitHubIssue = await createGitHubIssue(
-      userResult.rows[0].github_access_token,
+      decryptToken(userResult.rows[0].github_access_token),
       owner,
       repository,
       bug.title,
@@ -139,7 +161,9 @@ export async function githubOAuthInitiate(req: AuthRequest, res: Response) {
 
 async function connectedGitHub(userId: string) {
   const result = await pool.query('SELECT github_access_token, github_username FROM users WHERE id = $1', [userId]);
-  return result.rows[0];
+  const connected = result.rows[0];
+  if (connected?.github_access_token) connected.github_access_token = decryptToken(connected.github_access_token);
+  return connected;
 }
 
 export async function getGitHubStatus(req: AuthRequest, res: Response) {
@@ -372,7 +396,7 @@ export async function githubOAuthCallback(req: Request, res: Response) {
     // Save token to user record
     await pool.query(
       'UPDATE users SET github_access_token = $1, github_username = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
-      [accessToken, githubUsername, statePayload.userId]
+      [encryptToken(accessToken), githubUsername, statePayload.userId]
     );
 
     res.redirect(`${frontendUrl}?github_connected=true&github_user=${githubUsername}`);

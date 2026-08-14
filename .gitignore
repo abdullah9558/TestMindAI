@@ -8,6 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.npm-cache/
 dist
 dist-ssr
 *.local
@@ -16,6 +17,11 @@ dist-ssr
 .vscode/*
 !.vscode/extensions.json
 .idea
+public/testmind-logo-v2.png
+public/testmind-logo-v3.png
+public/testmind-logo-v3-source.png
+public/testmind-logo-v4-source.png
+public/testmind-logo.png
 .DS_Store
 *.suo
 *.ntvs*

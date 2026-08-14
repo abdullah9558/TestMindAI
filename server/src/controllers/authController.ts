@@ -3,6 +3,7 @@ import pool from '../db/connection.js';
 import { generateToken } from '../services/authService.js';
 import { getGitHubAccessToken, getGitHubUser } from '../services/githubService.js';
 import { v4 as uuidv4 } from 'uuid';
+import { encryptToken } from '../services/tokenCrypto.js';
 
 interface AuthRequest extends Request {
   userId?: string;
@@ -38,7 +39,7 @@ export async function githubCallback(req: Request, res: Response) {
       
       await pool.query(
         'UPDATE users SET github_access_token = $1, github_username = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
-        [accessToken, githubUser.login, userId]
+        [encryptToken(accessToken), githubUser.login, userId]
       );
     } else {
       // Create new user
@@ -48,7 +49,7 @@ export async function githubCallback(req: Request, res: Response) {
       await pool.query(
         `INSERT INTO users (id, email, name, github_id, github_username, github_access_token)
          VALUES ($1, $2, $3, $4, $5, $6)`,
-        [userId, userEmail, githubUser.name || githubUser.login, githubUser.id, githubUser.login, accessToken]
+        [userId, userEmail, githubUser.name || githubUser.login, githubUser.id, githubUser.login, encryptToken(accessToken)]
       );
     }
 
