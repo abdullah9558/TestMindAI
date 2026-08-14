@@ -4,8 +4,8 @@ import {
   createTestCase,
   deleteTestCase,
   generateTestCases,
-  generateScript,
   getTestCases,
+  getTestCaseAutomation,
   updateTestCaseStatus,
 } from '../controllers/testCaseController.js';
 import { authMiddleware } from '../middleware/auth.js';
@@ -13,8 +13,8 @@ import { authMiddleware } from '../middleware/auth.js';
 const router = Router();
 
 router.post('/generate', authMiddleware, generateTestCases);
-router.post('/generate-script', authMiddleware, generateScript);
 router.post('/', authMiddleware, createTestCase);
+router.get('/:testCaseId/automation', authMiddleware, getTestCaseAutomation);
 router.get('/:projectId', authMiddleware, getTestCases);
 router.delete('/project/:projectId', authMiddleware, clearTestCases);
 router.put('/:testCaseId/status', authMiddleware, updateTestCaseStatus);

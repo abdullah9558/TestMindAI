@@ -2,6 +2,9 @@ node_modules/
 dist/
 .env
 .env.local
+.postgres-data/
+.postgres-log.txt
+uploads/
 *.log
 .DS_Store
 uploads/

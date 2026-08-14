@@ -2,9 +2,36 @@ import { Request, Response } from 'express';
 import pool from '../db/connection.js';
 import { generateTestCasesWithAI, analyzeVideoWithAI } from '../services/aiService.js';
 import { v4 as uuidv4 } from 'uuid';
+import { generateAutomationFiles } from '../services/automationService.js';
 
 interface AuthRequest extends Request {
   userId?: string;
+}
+
+export async function getTestCaseAutomation(req: AuthRequest, res: Response) {
+  try {
+    if (!req.userId) return res.status(401).json({ error: 'Unauthorized' });
+    const result = await pool.query(
+      `SELECT tc.id, tc.title, tc.steps, tc.expected_result
+       FROM test_cases tc
+       JOIN projects p ON p.id = tc.project_id
+       WHERE tc.id = $1 AND p.user_id = $2`,
+      [req.params.testCaseId, req.userId]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Test case not found' });
+    const row = result.rows[0];
+    const files = generateAutomationFiles([{ ...row, expectedResult: row.expected_result }]);
+    const content = (path: string) => files.find(file => file.path === path)?.content || '';
+    res.json({
+      locators: JSON.parse(content('testmind/automation/locators.json')),
+      playwright: content('testmind/automation/playwright/generated.spec.js'),
+      cypress: content('testmind/automation/cypress/e2e/generated.cy.js'),
+      selenium: content('testmind/automation/selenium/generated.test.js'),
+    });
+  } catch (error) {
+    console.error('Failed to generate test case automation preview:', error);
+    res.status(500).json({ error: 'Failed to generate automation preview' });
+  }
 }
 
 export async function generateTestCases(req: AuthRequest, res: Response) {
@@ -44,10 +71,9 @@ export async function generateTestCases(req: AuthRequest, res: Response) {
       const videoRes = await pool.query('SELECT file_path FROM video_recordings WHERE id = $1 AND project_id = $2', [videoId, projectId]);
       if (videoRes.rows.length > 0) {
         const filePath = videoRes.rows[0].file_path;
-        try {
-          videoAnalysis = await analyzeVideoWithAI(filePath);
-        } catch (err) {
-          console.warn('Video analysis failed, continuing without video data');
+        videoAnalysis = await analyzeVideoWithAI(filePath);
+        if (!videoAnalysis.trim()) {
+          throw new Error('Video analysis returned no evidence; test cases were not generated.');
         }
       }
     }
@@ -62,8 +88,14 @@ export async function generateTestCases(req: AuthRequest, res: Response) {
     });
 
     // Save test cases to database
+    const existingResult = await pool.query('SELECT title FROM test_cases WHERE project_id = $1', [projectId]);
+    const knownTitles = new Set(existingResult.rows.map((row: { title: string }) => String(row.title).trim().toLowerCase()));
     const savedTestCases = [];
+    let duplicatesSkipped = 0;
     for (const testCase of testCases) {
+      const normalizedTitle = testCase.title.trim().toLowerCase();
+      if (knownTitles.has(normalizedTitle)) { duplicatesSkipped++; continue; }
+      knownTitles.add(normalizedTitle);
       const id = uuidv4();
       await pool.query(
         `INSERT INTO test_cases 
@@ -91,10 +123,10 @@ export async function generateTestCases(req: AuthRequest, res: Response) {
       savedTestCases.push({ id, ...testCase, platform: testCase.platform || platform || 'Web' });
     }
 
-    res.json({ success: true, testCases: savedTestCases });
+    res.json({ success: true, testCases: savedTestCases, generatedCount: testCases.length, duplicatesSkipped });
   } catch (error) {
     console.error('Error generating test cases:', error);
-    res.status(500).json({ error: 'Failed to generate test cases' });
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to generate test cases' });
   }
 }
 
@@ -282,20 +314,5 @@ export async function updateTestCaseStatus(req: AuthRequest, res: Response) {
   } catch (error) {
     console.error('Error updating test case:', error);
     res.status(500).json({ error: 'Failed to update test case' });
-  }
-}
-
-export async function generateScript(req: AuthRequest, res: Response) {
-  try {
-    const { testCase, language } = req.body;
-    if (!testCase || !language) {
-      return res.status(400).json({ error: 'testCase and language required' });
-    }
-    const { generateTestScript } = await import('../services/agentService.js');
-    const script = await generateTestScript(testCase, language);
-    res.json({ script });
-  } catch (error: any) {
-    console.error('Script generation error:', error);
-    res.status(500).json({ error: error.message });
   }
 }

@@ -1,4 +1,100 @@
 @import "tailwindcss";
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #102348;
+  background: #f3f7ff;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+html { background: #f3f7ff; }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: #f3f7ff; }
+button, input, textarea, select { font: inherit; }
+button, select { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+
+/* Light application theme. These selectors intentionally remap the existing
+   utility palette so every current and future view receives the same treatment. */
+[class*="bg-slate-950"] { background-color: #f3f7ff !important; }
+[class*="bg-slate-900"] { background-color: #ffffff !important; }
+[class*="bg-slate-850"], [class*="bg-slate-800"] { background-color: #edf3ff !important; }
+[class*="bg-slate-700"] { background-color: #dce7fb !important; }
+[class*="border-slate-950"], [class*="border-slate-900"], [class*="border-slate-850"],
+[class*="border-slate-800"], [class*="border-slate-700"] { border-color: #d7e2f5 !important; }
+
+[class*="text-white"], [class*="text-slate-100"], [class*="text-slate-200"] { color: #102348 !important; }
+[class*="text-slate-300"] { color: #29426d !important; }
+[class*="text-slate-400"] { color: #5c6f91 !important; }
+[class*="text-slate-500"], [class*="text-slate-600"], [class*="text-slate-650"] { color: #718096 !important; }
+
+[class*="bg-indigo-950"] { background-color: #ecf4ff !important; }
+[class*="from-indigo-950"][class*="to-indigo-950"] {
+  background-color: #f2f3ff !important;
+  background-image: linear-gradient(135deg, #ffffff 0%, #e9faff 48%, #f1eaff 100%) !important;
+  border-color: #c7d9fb !important;
+  box-shadow: 0 22px 55px rgba(55, 48, 163, .12) !important;
+}
+[class*="bg-indigo-600\/20"], [class*="bg-indigo-500\/15"] { background: linear-gradient(135deg, rgba(34,211,238,.14), rgba(124,58,237,.12)) !important; }
+[class*="text-indigo-300"], [class*="text-indigo-400"] { color: #5b35d5 !important; }
+[class*="border-indigo-800"], [class*="border-indigo-500"] { border-color: #a9bdf5 !important; }
+
+[class*="bg-emerald-950"] { background-color: #e8f9ff !important; }
+[class*="bg-emerald-500"] { background-color: #22d3ee !important; }
+[class*="text-emerald-300"], [class*="text-emerald-400"] { color: #087ea4 !important; }
+[class*="border-emerald-900"] { border-color: #9eeafa !important; }
+button[class*="bg-emerald-600"] { background: linear-gradient(135deg, #0891b2, #2563eb) !important; color: #fff !important; border-color: #38bdf8 !important; }
+[class*="bg-rose-950"], [class*="bg-rose-900"] { background-color: #fff1f2 !important; }
+[class*="text-rose-200"], [class*="text-rose-300"], [class*="text-rose-400"] { color: #be123c !important; }
+[class*="border-rose-800"], [class*="border-rose-900"] { border-color: #fecdd3 !important; }
+[class*="bg-amber-950"], [class*="bg-amber-900"] { background-color: #fffbeb !important; }
+[class*="text-amber-300"], [class*="text-amber-400"] { color: #a16207 !important; }
+
+/* Preserve strong contrast on primary actions. */
+button[class*="bg-indigo-600"], a[class*="bg-indigo-600"] { background: linear-gradient(135deg, #0891b2 0%, #6d3ee8 100%) !important; color: #fff !important; box-shadow: 0 9px 24px rgba(91,53,213,.24) !important; border-color: rgba(255,255,255,.22) !important; }
+button[class*="bg-indigo-600"]:hover, a[class*="bg-indigo-600"]:hover { filter: brightness(1.08); }
+button[class*="bg-indigo-600"] svg, a[class*="bg-indigo-600"] svg { color: #fff !important; }
+button[class*="bg-rose-600"] { color: #fff !important; }
+
+aside { background: linear-gradient(180deg, #07152e 0%, #0c1d40 62%, #101d45 100%) !important; border-color: rgba(34,211,238,.14) !important; box-shadow: 14px 0 40px rgba(7,21,46,.16); }
+aside [class*="text-white"], aside [class*="text-slate-100"], aside [class*="text-slate-200"], aside [class*="text-slate-300"] { color: #eafcff !important; }
+aside [class*="text-slate-400"], aside [class*="text-slate-500"] { color: #9fb6d9 !important; }
+aside [class*="bg-slate-900"], aside [class*="bg-slate-950"] { background-color: rgba(255,255,255,.045) !important; }
+aside [class*="bg-slate-800"] { background-color: rgba(34,211,238,.09) !important; }
+aside [class*="border-slate-800"], aside [class*="border-slate-700"] { border-color: rgba(148,190,255,.13) !important; }
+header { background: rgba(255,255,255,.78) !important; box-shadow: 0 1px 18px rgba(48,72,130,.08); }
+main { background-color: #f3f7ff !important; background-image: linear-gradient(rgba(95,120,170,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(95,120,170,.035) 1px, transparent 1px), radial-gradient(circle at 88% 2%, rgba(34,211,238,.16), transparent 27%), radial-gradient(circle at 63% 100%, rgba(124,58,237,.11), transparent 28%); background-size: 28px 28px, 28px 28px, auto, auto; }
+main [class*="bg-slate-900"] { background-color: rgba(255,255,255,.86) !important; backdrop-filter: blur(16px); box-shadow: 0 12px 35px rgba(45,65,120,.07); }
+
+.brand-logo-shell { width: 42px; height: 42px; border-radius: 13px; overflow: hidden; background: radial-gradient(circle, rgba(34,211,238,.14), rgba(124,58,237,.12)); border: 1px solid rgba(94,234,212,.32); box-shadow: 0 0 24px rgba(34,211,238,.22); flex: 0 0 auto; }
+.brand-logo { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+button, a, input, textarea, select { transition: border-color .16s ease, box-shadow .16s ease, background-color .16s ease, transform .16s ease; }
+button:not(:disabled):hover { transform: translateY(-1px); }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 3px solid rgba(34, 211, 238, .28) !important;
+  outline-offset: 2px;
+  border-color: #22d3ee !important;
+}
+input, textarea, select { color: #24324a !important; background: #fff !important; border-color: #cbd5e1 !important; }
+input::placeholder, textarea::placeholder { color: #8491a5 !important; opacity: 1; }
+
+/* Replace hard-to-read microcopy with a comfortable minimum size. */
+.text-\[10px\], .text-\[11px\] { font-size: .75rem !important; line-height: 1.1rem !important; }
+.text-xs { line-height: 1.25rem !important; }
+.rounded, .rounded-lg { border-radius: .65rem !important; }
+.rounded-xl { border-radius: 1rem !important; }
+pre { color: #334155 !important; background: #f8fafc !important; }
+
+@media (max-width: 767px) {
+  header { align-items: flex-start !important; gap: .75rem; }
+  header > div:last-child { gap: .5rem !important; flex-wrap: wrap; justify-content: flex-end; }
+  header > div:last-child > div, header > div:last-child > span { display: none; }
+  main > div[class*="mx-8"] { margin-left: 1rem !important; margin-right: 1rem !important; }
+  button, select { min-height: 42px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+}

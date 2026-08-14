@@ -115,6 +115,14 @@ export async function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_bug_reports_project_id ON bug_reports(project_id);
       CREATE INDEX IF NOT EXISTS idx_video_recordings_project_id ON video_recordings(project_id);
       CREATE INDEX IF NOT EXISTS idx_github_repositories_project_id ON github_repositories(project_id);
+
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS job_title VARCHAR(120) DEFAULT 'QA Professional';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS organization VARCHAR(160) DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone VARCHAR(80) DEFAULT 'UTC';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_name VARCHAR(80) DEFAULT 'Workspace';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS default_platform VARCHAR(50) DEFAULT 'Web';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS default_test_count VARCHAR(20) DEFAULT '10';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS default_perspectives JSONB DEFAULT '["UI/UX Checklists", "Functional Flows", "Edge Cases"]';
     `);
 
     console.log('✓ Database schema initialized successfully');

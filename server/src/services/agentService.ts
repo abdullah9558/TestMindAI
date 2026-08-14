@@ -43,6 +43,15 @@ interface GeneratedTestCase {
   tags: string[];
 }
 
+function normalizeTestCaseTitle(title: string): string {
+  const cleaned = (title || 'expected behavior works').trim().replace(/[.!]+$/, '');
+  if (/^verify that\s+/i.test(cleaned)) {
+    return `Verify that ${cleaned.replace(/^verify that\s+/i, '')}`;
+  }
+  const sentence = cleaned.replace(/^verify\s+/i, '');
+  return `Verify that ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}`;
+}
+
 const SYSTEM_PROMPT = `You are TestMind AI, an Enterprise QA Architect and Multi-Agent Testing System.
 
 Internally behave as a team of specialized QA experts: Business Analyst, QA Architect, Manual Tester, Automation Engineer, API Tester, Security Tester, Performance Engineer, Database Tester, Accessibility Specialist, UI/UX Tester.
@@ -87,7 +96,25 @@ OUTPUT: Return ONLY valid JSON in this exact format:
   "assumptions": []
 }
 
-RULES: Generate as many test cases as needed. Never stop early. No duplicates. No summaries. JSON only.`;
+RULES: Generate as many test cases as needed to cover every requirement and supported scenario. Never stop early. No duplicates. Every title must begin exactly with "Verify that". Use short, plain-language titles, preconditions, steps, and expected results that a non-technical tester can understand. Put one action in each step. No summaries. JSON only.`;
+
+const VIDEO_SYSTEM_PROMPT = `You are a QA analyst converting a timestamped screen-recording observation log into executable test cases.
+
+GROUNDING RULES:
+- Treat the video observation log as the only source of product facts.
+- Generate tests only for screens, controls, labels, values, actions, transitions, messages, and outcomes explicitly observed.
+- Respect only the testing perspectives requested by the user.
+- Do not add authentication, APIs, databases, security attacks, forms, navigation, performance, accessibility, or other features unless directly visible in the log.
+- Each test case must include a source timestamp such as [Video evidence 00:12] in its preconditions or first step.
+- Use exact visible UI labels and concrete actions rather than generic phrases.
+- Negative and edge tests are allowed only when they are a direct variation of an observed interaction; label them as inferred.
+- If the observation log lacks enough evidence, generate fewer cases. Never fill the requested count with invented coverage.
+- Cover every distinct screen, action, state change, message, outcome, and directly supported alternate or failure scenario in the observation log.
+- Every title must be one short, plain-language sentence beginning exactly with "Verify that".
+- Keep preconditions, steps, and expected results short, concrete, and understandable to a non-technical tester.
+- Each step must describe one action only. Avoid jargon and implementation details.
+
+Return ONLY a raw JSON array. Each item must contain title, preconditions, steps, expectedResult, severity, priority, testType, module, platform, and tags.`;
 
 export async function runTestCaseAgent(input: TestCaseGenerationInput): Promise<GeneratedTestCase[]> {
   const apiKey = process.env.GROQ_API_KEY;
@@ -98,7 +125,7 @@ export async function runTestCaseAgent(input: TestCaseGenerationInput): Promise<
   const countInstruction = input.testCount === 'Auto'
     ? 'Generate 50-100 test cases — cover every aspect thoroughly.'
     : typeof input.testCount === 'number'
-    ? `Generate exactly ${input.testCount} test cases. Pick the highest value ones.`
+    ? `Generate at least ${input.testCount} test cases, and generate more whenever needed to cover every supported scenario.`
     : 'Generate 50-80 test cases.';
 
   const metadata = {
@@ -117,26 +144,36 @@ export async function runTestCaseAgent(input: TestCaseGenerationInput): Promise<
     requirement: input.appDescription,
   };
 
-  const userMessage = JSON.stringify(metadata, null, 2);
+  const evidenceRules = input.videoAnalysis
+    ? '\n\nVIDEO EVIDENCE RULES: Generate cases from the timestamped observations above. Use exact visible labels, actions, values, and outcomes. Include the relevant timestamp in each video-derived case tags or steps. Do not invent screens or capabilities not observed in the recording; clearly label inferred negative or edge tests.'
+    : '';
+  const userMessage = JSON.stringify(metadata, null, 2) + evidenceRules;
+  const systemPrompt = input.videoAnalysis ? VIDEO_SYSTEM_PROMPT : SYSTEM_PROMPT;
+  const estimatedInputTokens = Math.ceil((systemPrompt.length + userMessage.length) / 4);
+  if (estimatedInputTokens > 6000) {
+    throw new Error('Input is too large for the Groq 8,000 TPM tier; routing to Gemini.');
+  }
+  const safeOutputTokens = Math.max(1200, Math.min(6000, 7600 - estimatedInputTokens));
 
-  // Agent loop — up to 3 attempts with self-correction
+  // One bounded Groq attempt. Invalid output falls back to Gemini rather than
+  // growing the conversation beyond the on-demand TPM limit.
   let attempts = 0;
   let messages: Groq.Chat.ChatCompletionMessageParam[] = [
     { role: 'user', content: userMessage }
   ];
 
-  while (attempts < 3) {
+  while (attempts < 1) {
     attempts++;
     console.log(`[Agent] Attempt ${attempts}...`);
 
     const response = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         ...messages
       ],
       temperature: 0.3,
-      max_tokens: 8000,
+      max_tokens: safeOutputTokens,
     });
 
     const raw = response.choices[0]?.message?.content || '';
@@ -155,18 +192,26 @@ export async function runTestCaseAgent(input: TestCaseGenerationInput): Promise<
       // Normalize
       const normalized = parsed.map(tc => ({
         ...tc,
+        title: normalizeTestCaseTitle(tc.title),
         platform: tc.platform || input.platform || 'Web',
       }));
 
+      if (input.videoAnalysis) {
+        const ungrounded = normalized.filter(testCase =>
+          !/\b\d{1,2}:\d{2}\b/.test(JSON.stringify(testCase))
+        );
+        if (ungrounded.length > 0) {
+          throw new Error(`${ungrounded.length} generated cases lacked video timestamp evidence`);
+        }
+      }
+
       console.log(`[Agent] Generated ${normalized.length} test cases`);
-      return typeof input.testCount === 'number'
-        ? normalized.slice(0, input.testCount)
-        : normalized;
+      return normalized;
 
     } catch (parseErr) {
       console.warn(`[Agent] Parse failed attempt ${attempts}:`, parseErr);
       
-      if (attempts < 3) {
+      if (attempts < 1) {
         // Self-correction prompt
         messages.push({
           role: 'user',
@@ -176,49 +221,6 @@ export async function runTestCaseAgent(input: TestCaseGenerationInput): Promise<
     }
   }
 
-  throw new Error('Agent failed to produce valid JSON after 3 attempts');
+  throw new Error('Groq did not produce valid JSON within its safe token budget');
 }
 
-export async function generateTestScript(
-  testCase: {
-    title: string;
-    preconditions: string;
-    steps: string[];
-    expectedResult: string;
-    module: string;
-    tags?: string[];
-  },
-  language: 'Playwright' | 'Cypress' | 'Selenium'
-): Promise<string> {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) throw new Error('GROQ_API_KEY not set');
-
-  const groq = new Groq({ apiKey });
-
-  const response = await groq.chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
-    messages: [
-      {
-        role: 'system',
-        content: `You are a senior test automation engineer. Generate a complete, runnable ${language} test script. Use realistic selectors based on context. Output ONLY the code, no explanation, no markdown fences.`
-      },
-      {
-        role: 'user',
-        content: `Generate a ${language} test script for this test case:
-
-Title: ${testCase.title}
-Module: ${testCase.module}
-Preconditions: ${testCase.preconditions}
-Steps:
-${testCase.steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}
-Expected Result: ${testCase.expectedResult}
-
-Write complete, working ${language} code with realistic selectors inferred from the steps.`
-      }
-    ],
-    temperature: 0.2,
-    max_tokens: 2000,
-  });
-
-  return response.choices[0]?.message?.content || '';
-}

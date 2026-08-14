@@ -71,7 +71,9 @@ export async function getCurrentUser(req: AuthRequest, res: Response) {
     }
 
     const result = await pool.query(
-      'SELECT id, email, name, github_username FROM users WHERE id = $1',
+      `SELECT id, email, name, github_username, job_title, organization, timezone, plan_name,
+              default_platform, default_test_count, default_perspectives
+       FROM users WHERE id = $1`,
       [req.userId]
     );
 
@@ -82,6 +84,31 @@ export async function getCurrentUser(req: AuthRequest, res: Response) {
     res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: 'Failed to get user' });
+  }
+}
+
+export async function updateCurrentUser(req: AuthRequest, res: Response) {
+  try {
+    if (!req.userId) return res.status(401).json({ error: 'Unauthorized' });
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    const perspectives = Array.isArray(req.body.defaultPerspectives)
+      ? req.body.defaultPerspectives.map(String).slice(0, 8)
+      : ['UI/UX Checklists', 'Functional Flows', 'Edge Cases'];
+    const result = await pool.query(
+      `UPDATE users SET name=$1, job_title=$2, organization=$3, timezone=$4,
+       default_platform=$5, default_test_count=$6, default_perspectives=$7, updated_at=CURRENT_TIMESTAMP
+       WHERE id=$8
+       RETURNING id, email, name, github_username, job_title, organization, timezone, plan_name,
+                 default_platform, default_test_count, default_perspectives`,
+      [name, String(req.body.jobTitle || '').trim(), String(req.body.organization || '').trim(),
+       String(req.body.timezone || 'UTC'), String(req.body.defaultPlatform || 'Web'),
+       String(req.body.defaultTestCount || '10'), JSON.stringify(perspectives), req.userId]
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ error: 'Failed to update profile' });
   }
 }
 

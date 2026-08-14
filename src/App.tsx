@@ -1,33 +1,35 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
-  Play, Pause, RotateCcw, Upload, FileText, Bug, Code, GitBranch, GitPullRequest,
-  Database, BarChart2, Cpu, CheckCircle2, Terminal, RefreshCw, Sparkles, LayoutGrid,
-  CheckSquare, Copy, Hammer, Menu, ExternalLink, Layers, Award, Globe, Laptop, Smartphone,
-  Gamepad2, Compass, Plus, Trash2, X
+  Play, Pause, RotateCcw, Upload, FileText, Bug, GitBranch,
+  BarChart2, Cpu, CheckCircle2, Terminal, RefreshCw, Sparkles, LayoutGrid,
+  Menu, ExternalLink, Award, Globe, Laptop, Smartphone,
+  Gamepad2, Compass, Plus, Trash2, X, ChevronDown, Copy, Check, Settings, User
 } from 'lucide-react';
-import { createDevSession, getGitHubAuthUrl, getCurrentUser } from './api/auth';
-import { createBugReport, getBugReports } from './api/bugs';
+import { createDevSession, getCurrentUser, getGitHubAuthUrl, updateCurrentUser } from './api/auth';
+import { getBugReports } from './api/bugs';
 import { createProject, getProjects } from './api/projects';
 import {
   clearTestCases,
   createTestCase,
   deleteTestCase,
   generateTestCases as generateTestCasesFromApi,
+  getTestCaseAutomation,
   getTestCases,
   updateTestCaseStatus,
-  generateScriptAPI,
+  type TestCaseAutomation,
 } from './api/testCases';
-import { uploadVideo, getGitHubRepos } from './api/integrations';
+import { createGitHubRepository, disconnectGitHub, getGitHubRepos, getGitHubStatus, parseTelemetry, publishProjectToGitHub, pushBugToGitHub, uploadVideo } from './api/integrations';
 import { setToken } from './api/client';
 
 interface TestCase {
   id: string;
   title: string;
+  description?: string;
   preconditions: string;
   steps: string[];
   expectedResult: string;
   actualResult?: string;
-  status: 'pending' | 'passed' | 'failed';
+  status: 'pending' | 'passed' | 'failed' | 'blocked';
   severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   priority: 'P3' | 'P2' | 'P1' | 'P0';
   testType: string;
@@ -68,6 +70,27 @@ interface Project {
   app_description?: string;
   platform_type?: string;
 }
+
+interface UserProfile {
+  id: string; email: string; name: string; github_username?: string;
+  job_title: string; organization: string; timezone: string; plan_name: string;
+  default_platform: string; default_test_count: string; default_perspectives: string[];
+}
+
+type TestCaseRow = Partial<TestCase> & {
+  expected_result?: string;
+  actual_result?: string;
+  test_type?: string;
+};
+
+type BugReportRow = Partial<BugReport> & {
+  expected_result?: string;
+  actual_result?: string;
+  created_at?: string;
+  github_issue_url?: string;
+  rca_text?: string;
+  suggested_fix?: string;
+};
 
 const PRISMA_SCHEMA_RAW = `// TESTMIND AI - DATABASE SCHEMA (PostgreSQL)
 datasource db {
@@ -208,6 +231,11 @@ jobs:
         DATABASE_URL: \${{ secrets.DATABASE_URL }}
         NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: \${{ secrets.CLERK_KEY }}`;
 
+// Retained as copy-ready integration templates for upcoming export actions.
+void PRISMA_SCHEMA_RAW;
+void DOCKER_FILE_RAW;
+void GH_ACTION_RAW;
+
 const toArray = (value: unknown): string[] => {
   if (Array.isArray(value)) return value.map(String);
   if (typeof value === 'string' && value.trim()) {
@@ -221,9 +249,10 @@ const toArray = (value: unknown): string[] => {
   return [];
 };
 
-const mapTestCase = (row: any): TestCase => ({
-  id: row.id,
+const mapTestCase = (row: TestCaseRow): TestCase => ({
+  id: row.id || crypto.randomUUID(),
   title: row.title || 'Untitled test case',
+  description: row.description || '',
   preconditions: row.preconditions || 'No preconditions recorded.',
   steps: toArray(row.steps),
   expectedResult: row.expectedResult || row.expected_result || '',
@@ -237,8 +266,8 @@ const mapTestCase = (row: any): TestCase => ({
   tags: toArray(row.tags),
 });
 
-const mapBugReport = (row: any): BugReport => ({
-  id: row.id,
+const mapBugReport = (row: BugReportRow): BugReport => ({
+  id: row.id || crypto.randomUUID(),
   title: row.title || 'Untitled bug',
   description: row.description || '',
   steps: toArray(row.steps),
@@ -262,7 +291,7 @@ const formatTime = (seconds: number) => {
 
 export default function App() {
   // Navigation State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'upload' | 'testcases' | 'bugs' | 'integrations' | 'analytics'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'upload' | 'testcases' | 'bugs' | 'integrations' | 'analytics' | 'profile'>('dashboard');
 
   // Core Data States
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
@@ -273,6 +302,7 @@ export default function App() {
   const [dataError, setDataError] = useState('');
   const [logInputText, setLogInputText] = useState('');
   const [uploadedVideoFile, setUploadedVideoFile] = useState<File | null>(null);
+  const [uploadedVideoId, setUploadedVideoId] = useState('');
   const [uploadedVideoUrl, setUploadedVideoUrl] = useState('');
   const [videoUploadMessage, setVideoUploadMessage] = useState('Drag & drop or choose a video file to analyze.');
   const [isDraggingUpload, setIsDraggingUpload] = useState(false);
@@ -284,14 +314,22 @@ export default function App() {
 
   // AI Pipeline Custom Input Parameters
   const [customAppDesc, setCustomAppDesc] = useState('');
-  const [selectedPerspectives, setSelectedPerspectives] = useState<string[]>(['UI/UX', 'Functional', 'Edge Case']);
+  const [selectedPerspectives, setSelectedPerspectives] = useState<string[]>(['UI/UX Checklists', 'Functional Flows', 'Edge Cases']);
   const [selectedPlatform, setSelectedPlatform] = useState('Web');
   const [selectedTestCount, setSelectedTestCount] = useState<'5' | '10' | '20' | '30' | 'Custom' | 'Auto'>('10');
   const [customTestCount, setCustomTestCount] = useState('12');
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [profileForm, setProfileForm] = useState({ name: '', jobTitle: '', organization: '', timezone: 'UTC', defaultPlatform: 'Web', defaultTestCount: '10', defaultPerspectives: ['UI/UX Checklists', 'Functional Flows', 'Edge Cases'] as string[] });
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [aiGenerating, setAiGenerating] = useState(false);
   const [generationLog, setGenerationLog] = useState<string[]>([]);
   const [isProcessingUpload, setIsProcessingUpload] = useState(false);
   const [showAddTestCaseForm, setShowAddTestCaseForm] = useState(false);
+  const [expandedTestCaseId, setExpandedTestCaseId] = useState<string | null>(null);
+  const [automationByTestCase, setAutomationByTestCase] = useState<Record<string, TestCaseAutomation>>({});
+  const [automationLoadingId, setAutomationLoadingId] = useState<string | null>(null);
+  const [automationTab, setAutomationTab] = useState<'playwright' | 'cypress' | 'selenium'>('playwright');
+  const [copiedScript, setCopiedScript] = useState('');
   const [manualTestCase, setManualTestCase] = useState({
     title: '',
     preconditions: '',
@@ -311,24 +349,18 @@ export default function App() {
   const [activeLogMsg, setActiveLogMsg] = useState('');
   const [parsedLogStatus, setParsedLogStatus] = useState<'idle' | 'parsing' | 'success' | 'failed'>('idle');
 
-  // Test Case Executions State
-  const [executingTestCase, setExecutingTestCase] = useState<TestCase | null>(null);
-  const [executionSteps, setExecutionSteps] = useState<boolean[]>([]);
-  const [executionComment, setExecutionComment] = useState('');
-  
-  // Script Synthesizer state
-  const [scriptTargetCase, setScriptTargetCase] = useState<TestCase | null>(null);
-  const [selectedScriptType, setSelectedScriptType] = useState<'Playwright' | 'Cypress' | 'Selenium'>('Playwright');
-  const [generatedScriptCode, setGeneratedScriptCode] = useState('');
-
   // RCA Slide-Over and Github OAuth Setup Simulation
   const [rcaTargetBug, setRcaTargetBug] = useState<BugReport | null>(null);
   const [oauthStep, setOauthStep] = useState<'disconnected' | 'authenticating' | 'connected'>('disconnected');
-  const [githubUser, setGithubUser] = useState<{name: string, repos: string[]} | null>(null);
+  const [githubUser, setGithubUser] = useState<{name: string; login: string; avatarUrl?: string; repos: string[]} | null>(null);
   const [selectedRepo, setSelectedRepo] = useState('');
+  const [newRepoName, setNewRepoName] = useState('');
+  const [newRepoPrivate, setNewRepoPrivate] = useState(false);
+  const [isCreatingRepo, setIsCreatingRepo] = useState(false);
   const [isPushingCode, setIsPushingCode] = useState(false);
   const [gitTerminalLogs, setGitTerminalLogs] = useState<string[]>([]);
   const [pushedSuccess, setPushedSuccess] = useState(false);
+  const [pullRequestUrl, setPullRequestUrl] = useState('');
 
   // Search/Filters
   const [testFilterPlatform, setTestFilterPlatform] = useState('All');
@@ -376,14 +408,18 @@ export default function App() {
         const existingToken = localStorage.getItem('token');
         if (existingToken) {
           try {
-            const user = await getCurrentUser();
-            const repos = await getGitHubRepos();
-            if (!cancelled) {
+            const status = await getGitHubStatus();
+            if (status.connected && status.user) {
+              const repos = await getGitHubRepos();
+              if (!cancelled) {
               setGithubUser({
-                name: user.name || user.github_username || 'GitHub User',
-                repos: repos.map((repo: any) => repo.full_name || repo.name || ''),
+                name: status.user.name,
+                login: status.user.login,
+                avatarUrl: status.user.avatarUrl,
+                repos: repos.map((repo) => repo.full_name || repo.name || ''),
               });
               setOauthStep('connected');
+              }
             }
           } catch (error) {
             // If GitHub-specific auth is not available, keep the app running in dev mode.
@@ -395,12 +431,26 @@ export default function App() {
           await createDevSession();
         }
 
+        const profile = await getCurrentUser() as UserProfile;
+        if (!cancelled) {
+          setUserProfile(profile);
+          const form = {
+            name: profile.name || '', jobTitle: profile.job_title || 'QA Professional', organization: profile.organization || '', timezone: profile.timezone || 'UTC',
+            defaultPlatform: profile.default_platform || 'Web', defaultTestCount: profile.default_test_count || '10',
+            defaultPerspectives: (Array.isArray(profile.default_perspectives) ? profile.default_perspectives : ['UI/UX Checklists', 'Functional Flows', 'Edge Cases']).map(value => ({ 'UI/UX': 'UI/UX Checklists', 'Functional': 'Functional Flows', 'Edge Case': 'Edge Cases' }[value] || value)),
+          };
+          setProfileForm(form);
+          setSelectedPlatform(form.defaultPlatform);
+          setSelectedPerspectives(form.defaultPerspectives);
+          if (['5', '10', '20', '30', 'Custom', 'Auto'].includes(form.defaultTestCount)) setSelectedTestCount(form.defaultTestCount as typeof selectedTestCount);
+        }
+
         let projects = await getProjects();
         if (projects.length === 0) {
           const created = await createProject({
             name: 'TestMind AI Workspace',
             description: 'Local dynamic workspace backed by PostgreSQL.',
-            appDescription: 'Describe the product under test, then generate cases from the live backend.',
+            appDescription: '',
             platformType: 'WEB_APP',
           });
           projects = [created];
@@ -410,7 +460,8 @@ export default function App() {
 
         const project = projects[0];
         setActiveProject(project);
-        setCustomAppDesc(project.app_description || '');
+        const legacyPlaceholder = 'Describe the product under test, then generate cases from the live backend.';
+        setCustomAppDesc(project.app_description === legacyPlaceholder ? '' : project.app_description || '');
         await loadProjectData(project.id);
       } catch (error) {
         if (!cancelled) {
@@ -455,41 +506,66 @@ export default function App() {
     setIsPlayingVideo(false);
 
     if (!activeProject) {
-      setVideoUploadMessage('Video loaded locally. Backend project is still loading, so AI generation did not start yet.');
+      setVideoUploadMessage('Video loaded locally. Wait for the backend project, then upload again.');
       return;
     }
 
     try {
       setIsProcessingUpload(true);
-      setAiGenerating(true);
-      setGenerationLog([
-        'Uploading recording to backend storage...',
-        'Preparing AI video analysis context...',
-      ]);
+      setGenerationLog(['Uploading recording to backend storage...']);
 
       const videoRecord = await uploadVideo(activeProject.id, file);
-      setGenerationLog(prev => [...prev, 'Generating test cases from uploaded recording...']);
-
-      await generateTestCasesFromApi({
-        projectId: activeProject.id,
-        appDescription: customAppDesc || `Uploaded QA recording: ${file.name}`,
-        perspectives: selectedPerspectives,
-        platform: selectedPlatform,
-        testCount: getRequestedTestCount(),
-        videoId: videoRecord.id,
-      });
-
-      setGenerationLog(prev => [...prev, 'Saved video-derived test cases to PostgreSQL.']);
-      await loadProjectData(activeProject.id);
-      setActiveTab('testcases');
-      setVideoUploadMessage(`Generated test cases from ${file.name}.`);
+      setUploadedVideoId(videoRecord.id);
+      setGenerationLog(prev => [...prev, 'Recording uploaded. Configure the options and click Generate Test Cases.']);
+      setVideoUploadMessage(`${file.name} is ready. Test cases have not been generated yet.`);
     } catch (error) {
-      setDataError(error instanceof Error ? error.message : 'Failed to generate test cases from uploaded video.');
-      setVideoUploadMessage('Video loaded locally, but AI generation failed. Check backend/API settings.');
+      setDataError(error instanceof Error ? error.message : 'Failed to upload the video.');
+      setVideoUploadMessage('Video loaded locally, but backend upload failed.');
     } finally {
       setIsProcessingUpload(false);
-      setAiGenerating(false);
     }
+  };
+
+  const handleDescriptionPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedText = event.clipboardData.getData('text/plain');
+    if (!pastedText) return;
+    event.preventDefault();
+    const start = event.currentTarget.selectionStart;
+    const end = event.currentTarget.selectionEnd;
+    setCustomAppDesc(previous => `${previous.slice(0, start)}${pastedText}${previous.slice(end)}`);
+    setActiveLogMsg(`Pasted ${pastedText.length.toLocaleString()} characters.`);
+    setTimeout(() => setActiveLogMsg(''), 2500);
+  };
+
+  const handleGenerateFromRecording = async () => {
+    if (!activeProject || !uploadedVideoId || !uploadedVideoFile) {
+      setDataError('Upload a recording before generating test cases.');
+      return;
+    }
+    try {
+      setAiGenerating(true); setDataError('');
+      setGenerationLog(['Analyzing the uploaded recording with the selected settings...', 'Generating scenario coverage from the video...', ...(customAppDesc.length > 10000 ? ['Large specification detected. Coverage batches may take several minutes; keep this page open.'] : [])]);
+      await generateTestCasesFromApi({ projectId: activeProject.id, appDescription: customAppDesc || `Uploaded QA recording: ${uploadedVideoFile.name}`, perspectives: selectedPerspectives, platform: selectedPlatform, testCount: getRequestedTestCount(), videoId: uploadedVideoId });
+      setGenerationLog(previous => [...previous, 'Saved generated test cases to PostgreSQL.']);
+      await loadProjectData(activeProject.id);
+      setVideoUploadMessage(`Generated test cases from ${uploadedVideoFile.name}.`);
+      setActiveTab('testcases');
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Failed to generate test cases from the recording.');
+    } finally { setAiGenerating(false); }
+  };
+
+  const handleSaveProfile = async () => {
+    try {
+      setIsSavingProfile(true); setDataError('');
+      const saved = await updateCurrentUser(profileForm) as UserProfile;
+      setUserProfile(saved);
+      setSelectedPlatform(saved.default_platform);
+      setSelectedPerspectives(saved.default_perspectives);
+      if (['5', '10', '20', '30', 'Custom', 'Auto'].includes(saved.default_test_count)) setSelectedTestCount(saved.default_test_count as typeof selectedTestCount);
+      setActiveLogMsg('Profile and test defaults saved.'); setTimeout(() => setActiveLogMsg(''), 3000);
+    } catch (error) { setDataError(error instanceof Error ? error.message : 'Failed to save profile.'); }
+    finally { setIsSavingProfile(false); }
   };
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
@@ -552,7 +628,7 @@ export default function App() {
     setVideoProgress(newValue);
   };
 
-  const navigateToTab = (tab: 'dashboard' | 'upload' | 'testcases' | 'bugs' | 'integrations' | 'analytics') => {
+  const navigateToTab = (tab: 'dashboard' | 'upload' | 'testcases' | 'bugs' | 'integrations' | 'analytics' | 'profile') => {
     setActiveTab(tab);
     setMobileMenuOpen(false);
   };
@@ -567,7 +643,7 @@ export default function App() {
       return;
     }
     setAiGenerating(true);
-    setGenerationLog([]);
+    setGenerationLog(customAppDesc.length > 10000 ? ['Large specification detected. Processing every section in coverage batches; this may take several minutes.'] : []);
     
     const logs = [
       "Initializing AI Flow Analyzer Agent...",
@@ -602,84 +678,34 @@ export default function App() {
     }
   };
 
-  const handleParseLogs = () => {
+  const handleParseLogs = async () => {
     if (!logInputText.trim()) return;
     setParsedLogStatus('parsing');
-    
-    setTimeout(() => {
-      const isCrashLog = logInputText.toLowerCase().includes('error') || logInputText.toLowerCase().includes('exception') || logInputText.toLowerCase().includes('crash');
-      
+    setDataError('');
+
+    try {
+      const analysis = await parseTelemetry({
+        telemetry: logInputText,
+        timestamp: formatTime(videoCurrentTime),
+      });
+
       const newEvent: TimelineEvent = {
         id: `LOG-EVT-${Date.now()}`,
-        time: '00:45',
-        event: 'Gemini Log Parser',
-        type: isCrashLog ? 'Parsing Detected Exception' : 'Telemetry Event Logged',
-        desc: logInputText.length > 80 ? `${logInputText.slice(0, 80)}...` : logInputText,
-        status: isCrashLog ? 'critical' : 'warning'
+        time: formatTime(videoCurrentTime),
+        event: analysis.event,
+        type: analysis.type,
+        desc: analysis.description,
+        status: analysis.status,
       };
 
       setTimelineEvents(prev => [...prev, newEvent]);
       setParsedLogStatus('success');
       setLogInputText('');
-      
-      // Auto toast simulated message
-      setActiveLogMsg('Successfully parsed! Added custom telemetry marker onto recording timelines.');
+      setActiveLogMsg('Gemini analyzed the telemetry and added it to the recording timeline.');
       setTimeout(() => setActiveLogMsg(''), 4000);
-    }, 1200);
-  };
-
-  const handleGenerateScript = async (testCase: TestCase, language: 'Playwright' | 'Cypress' | 'Selenium') => {
-    setScriptTargetCase(testCase);
-    setSelectedScriptType(language);
-    setGeneratedScriptCode('// Generating script with AI...');
-    try {
-      const token = localStorage.getItem('token') || '';
-      const script = await generateScriptAPI(testCase, language, token);
-      setGeneratedScriptCode(script);
-    } catch (err: any) {
-      setGeneratedScriptCode(`// Error generating script: ${err.message}`);
-    }
-  };
-
-  const startTestCaseExecution = (testCase: TestCase) => {
-    setExecutingTestCase(testCase);
-    setExecutionSteps(new Array(testCase.steps.length).fill(false));
-    setExecutionComment('');
-  };
-
-  const submitTestExecutionResult = async (passed: boolean) => {
-    if (!executingTestCase || !activeProject) return;
-
-    try {
-      await updateTestCaseStatus(executingTestCase.id, {
-        status: passed ? 'passed' : 'failed',
-        actualResult: executionComment || (passed ? 'Verified steps completed without issue' : 'Steps halted due to runtime mismatch'),
-      });
-
-      if (!passed) {
-        const createdBug = await createBugReport({
-          projectId: activeProject.id,
-          testCaseId: executingTestCase.id,
-          title: `Failure during Test Run: ${executingTestCase.title}`,
-          description: `Executed workflow for module: ${executingTestCase.module}. Execution comment logged: ${executionComment}`,
-          steps: executingTestCase.steps,
-          expectedResult: executingTestCase.expectedResult,
-          actualResult: executionComment || 'Visual execution failed to verify state matches the expectations of this case.',
-          severity: executingTestCase.severity,
-          priority: executingTestCase.priority,
-        });
-        setActiveLogMsg(`Test Case Failed. Bug tracker record saved: ${createdBug.id}!`);
-        setTimeout(() => setActiveLogMsg(''), 5000);
-      } else {
-        setActiveLogMsg('Test Case Passed. Status saved to the database.');
-        setTimeout(() => setActiveLogMsg(''), 4000);
-      }
-
-      await loadProjectData(activeProject.id);
     } catch (error) {
-      setDataError(error instanceof Error ? error.message : 'Failed to save test execution result.');
-    } finally {
-      setExecutingTestCase(null);
+      setParsedLogStatus('failed');
+      setDataError(error instanceof Error ? error.message : 'Gemini telemetry analysis failed.');
     }
   };
 
@@ -765,31 +791,101 @@ export default function App() {
     }
   };
 
-  const handleCreateAndPushRepo = () => {
-    if (!selectedRepo) return;
+  const handleCreateRepository = async () => {
+    if (!activeProject || !newRepoName.trim()) return;
+    try {
+      setIsCreatingRepo(true);
+      setDataError('');
+      const repo = await createGitHubRepository({ projectId: activeProject.id, name: newRepoName.trim(), private: newRepoPrivate });
+      setGithubUser(prev => prev ? { ...prev, repos: Array.from(new Set([...prev.repos, repo.full_name])) } : prev);
+      setSelectedRepo(repo.full_name);
+      setNewRepoName('');
+      setActiveLogMsg(`Created ${repo.full_name} on GitHub.`);
+      setTimeout(() => setActiveLogMsg(''), 3500);
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Failed to create GitHub repository.');
+    } finally {
+      setIsCreatingRepo(false);
+    }
+  };
+
+  const handleToggleTestCase = async (testCaseId: string) => {
+    if (expandedTestCaseId === testCaseId) {
+      setExpandedTestCaseId(null);
+      return;
+    }
+    setExpandedTestCaseId(testCaseId);
+    setAutomationTab('playwright');
+    if (automationByTestCase[testCaseId]) return;
+    try {
+      setAutomationLoadingId(testCaseId);
+      const automation = await getTestCaseAutomation(testCaseId);
+      setAutomationByTestCase(previous => ({ ...previous, [testCaseId]: automation }));
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Failed to load automation scripts.');
+    } finally {
+      setAutomationLoadingId(null);
+    }
+  };
+
+  const handleTestCaseStatus = async (testCaseId: string, status: TestCase['status']) => {
+    try {
+      await updateTestCaseStatus(testCaseId, { status });
+      setTestCaseData(previous => previous.map(test => test.id === testCaseId ? { ...test, status } : test));
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Failed to update test status.');
+    }
+  };
+
+  const handleCopyScript = async (testCaseId: string, label: string, content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      const copyKey = `${testCaseId}-${label}`;
+      setCopiedScript(copyKey);
+      setTimeout(() => setCopiedScript(''), 2000);
+    } catch {
+      setDataError('Could not copy the script. Select the code and copy it manually.');
+    }
+  };
+
+  const handleCreateAndPushRepo = async () => {
+    if (!selectedRepo || !activeProject) return;
     setIsPushingCode(true);
     setGitTerminalLogs([]);
     setPushedSuccess(false);
+    setPullRequestUrl('');
+    try {
+      const result = await publishProjectToGitHub({ projectId: activeProject.id, repositoryFullName: selectedRepo });
+      setGitTerminalLogs(result.logs.map(log => `[github] ${log}`));
+      setPullRequestUrl(result.pullRequestUrl);
+      setPushedSuccess(true);
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Failed to publish to GitHub.');
+      setGitTerminalLogs(['[github] Publish failed. See the error message above.']);
+    } finally {
+      setIsPushingCode(false);
+    }
+  };
 
-    const logs = [
-      "Initializing fresh local git repository...",
-      "Setting up standard remote origin: git@github.com:principal-qa-architect/testmind-ai-platform.git",
-      "Staging automatic framework artifacts (Next.js config, Prisma schemas, Docker configurations)...",
-      "Generating automated GitHub Actions testing templates (workflow files, environment scripts)...",
-      "Creating initial commit block: 'feat(core): setup production code pipelines via TestMind AI Automation'",
-      "Pushing assets cleanly up to branch 'main'...",
-      "Opening pull request #1 in repository successfully!"
-    ];
+  const handleDisconnectGitHub = async () => {
+    if (!window.confirm('Disconnect GitHub from TestMind AI?')) return;
+    try {
+      await disconnectGitHub();
+      setGithubUser(null); setSelectedRepo(''); setOauthStep('disconnected'); setGitTerminalLogs([]); setPushedSuccess(false);
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Failed to disconnect GitHub.');
+    }
+  };
 
-    logs.forEach((logMessage, index) => {
-      setTimeout(() => {
-        setGitTerminalLogs(prev => [...prev, `[git-agent] ${logMessage}`]);
-        if (index === logs.length - 1) {
-          setIsPushingCode(false);
-          setPushedSuccess(true);
-        }
-      }, (index + 1) * 850);
-    });
+  const handleCreateGitHubIssue = async (bugId: string) => {
+    if (!selectedRepo) { setDataError('Select a GitHub repository in Integrations first.'); return; }
+    try {
+      const result = await pushBugToGitHub({ bugId, repoName: selectedRepo });
+      setBugReports(prev => prev.map(bug => bug.id === bugId ? { ...bug, githubIssueUrl: result.issueUrl } : bug));
+      window.open(result.issueUrl, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Failed to create GitHub issue.');
+    }
   };
 
   const filteredTestCases = useMemo(() => {
@@ -837,7 +933,10 @@ export default function App() {
   }, [customAppDesc, testCases]);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex overflow-hidden">
+    <div className="h-screen bg-slate-950 text-slate-100 font-sans flex overflow-hidden">
+      <a href="#main-content" className="fixed left-4 top-3 z-50 -translate-y-20 focus:translate-y-0 bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold shadow-lg">
+        Skip to main content
+      </a>
       {/* SIDEBAR NAVIGATION */}
       {mobileMenuOpen && (
         <div
@@ -845,16 +944,16 @@ export default function App() {
           onClick={() => setMobileMenuOpen(false)}
         />
       )}
-      <aside className={`fixed inset-y-0 left-0 z-40 w-72 bg-slate-900 border-r border-slate-800 flex flex-col justify-between transform transition-transform duration-300 md:static md:translate-x-0 md:w-64 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+      <aside className={`fixed inset-y-0 left-0 z-40 h-screen w-72 shrink-0 overflow-hidden bg-slate-900 border-r border-slate-800 flex flex-col justify-between transform transition-transform duration-300 md:sticky md:top-0 md:translate-x-0 md:w-64 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
         <div>
           {/* Logo Brand Panel */}
           <div className="p-6 border-b border-slate-800 flex items-center space-x-3">
-            <div className="bg-indigo-600 p-2 rounded-lg text-white">
-              <Cpu className="w-6 h-6 animate-pulse" />
+            <div className="brand-logo-shell">
+              <img src="/TestMindAI/testmind-logo-v4.png" alt="TestMind AI" className="brand-logo" />
             </div>
             <div>
               <h1 className="font-bold text-lg tracking-wide text-white">TestMind AI</h1>
-              <span className="text-xs text-indigo-400 font-semibold uppercase tracking-wider">Enterprise Suite</span>
+              <span className="text-xs text-indigo-400 font-semibold">QA workspace</span>
             </div>
           </div>
 
@@ -865,7 +964,7 @@ export default function App() {
               className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${activeTab === 'dashboard' ? 'bg-indigo-600/20 text-indigo-400 border-l-4 border-indigo-500' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
             >
               <LayoutGrid className="w-4.5 h-4.5" />
-              <span>Executive Dashboard</span>
+              <span>Dashboard</span>
             </button>
 
             <button 
@@ -873,7 +972,7 @@ export default function App() {
               className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${activeTab === 'upload' ? 'bg-indigo-600/20 text-indigo-400 border-l-4 border-indigo-500' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
             >
               <Upload className="w-4.5 h-4.5" />
-              <span>Record & Parse Logs</span>
+              <span>Analyze recording</span>
             </button>
 
             <button 
@@ -895,7 +994,7 @@ export default function App() {
             >
               <div className="flex items-center space-x-3">
                 <Bug className="w-4.5 h-4.5" />
-                <span>Visual Bug Board</span>
+              <span>Bug reports</span>
               </div>
               <span className="bg-rose-900/40 text-rose-300 text-xs font-semibold px-2 py-0.5 rounded-full">
                 {bugs.length}
@@ -907,7 +1006,7 @@ export default function App() {
               className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${activeTab === 'integrations' ? 'bg-indigo-600/20 text-indigo-400 border-l-4 border-indigo-500' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
             >
               <GitBranch className="w-4.5 h-4.5" />
-              <span>GitHub & Integrations</span>
+              <span>Integrations</span>
             </button>
 
             <button 
@@ -915,36 +1014,39 @@ export default function App() {
               className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${activeTab === 'analytics' ? 'bg-indigo-600/20 text-indigo-400 border-l-4 border-indigo-500' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
             >
               <BarChart2 className="w-4.5 h-4.5" />
-              <span>Metrics & SLA</span>
+              <span>Analytics</span>
             </button>
           </nav>
         </div>
 
         {/* User Workspace Info Footer */}
         <div className="p-4 border-t border-slate-800 bg-slate-950/40">
-          <div className="flex items-center space-x-3 mb-3">
-            <div className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-slate-950 font-bold text-xs uppercase">
-              QA
+          <button
+            onClick={() => navigateToTab('profile')}
+            className={`w-full flex items-center gap-2 mb-2 px-1.5 py-1.5 rounded-lg text-left hover:bg-slate-800 transition ${activeTab === 'profile' ? 'bg-slate-800 ring-1 ring-slate-700' : ''}`}
+            aria-label="Open profile and settings"
+          >
+            <div className="w-7 h-7 rounded-full bg-indigo-500 flex items-center justify-center text-white font-bold text-[10px] uppercase shrink-0">{userProfile?.name?.split(/\s+/).map(part => part[0]).join('').slice(0, 2) || 'U'}</div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-slate-300">{userProfile?.name || 'Loading profile...'}</p>
+              <p className="text-[10px] text-slate-500">{userProfile?.job_title || 'QA Professional'} · {userProfile?.plan_name || 'Workspace'}</p>
             </div>
-            <div>
-              <p className="text-xs font-semibold text-slate-300">Principal Architect</p>
-              <p className="text-[10px] text-slate-500">Tier: Enterprise AI Pro</p>
-            </div>
-          </div>
+            <Settings className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+          </button>
           <div className="bg-slate-900 p-2.5 rounded border border-slate-800">
             <div className="flex justify-between items-center text-[10px] text-slate-400 mb-1">
-              <span>Token Usage Daily</span>
-              <span>85%</span>
+              <span>Estimated workspace tokens</span>
+              <span>{Math.min(100, Math.round((tokenEstimate / 20000) * 100))}%</span>
             </div>
             <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-              <div className="bg-indigo-500 h-full w-4/5" />
+              <div className="bg-indigo-500 h-full" style={{ width: `${Math.min(100, Math.round((tokenEstimate / 20000) * 100))}%` }} />
             </div>
           </div>
         </div>
       </aside>
 
       {/* MAIN SCREEN PANEL AREA */}
-      <main className="flex-1 flex flex-col min-w-0 bg-slate-950 overflow-y-auto">
+      <main id="main-content" className="h-screen flex-1 flex flex-col min-w-0 bg-slate-950 overflow-y-auto" tabIndex={-1}>
         
         {/* TOP COMPONENT HEADER BAR */}
         <header className="bg-slate-900/60 backdrop-blur-md border-b border-slate-800 px-4 md:px-8 py-4 shrink-0 flex items-center justify-between z-10 sticky top-0">
@@ -972,12 +1074,12 @@ export default function App() {
               title="Refresh database state"
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              <span>Refresh Data</span>
+              <span>Refresh</span>
             </button>
             <div className="h-6 w-px bg-slate-800" />
             <span className="text-xs font-semibold text-emerald-400 flex items-center space-x-1">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping inline-block mr-1" />
-              AI Agent Nodes Online
+              AI services online
             </span>
           </div>
         </header>
@@ -1025,9 +1127,12 @@ export default function App() {
                       <textarea 
                         value={customAppDesc}
                         onChange={(e) => setCustomAppDesc(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none text-slate-100 placeholder-slate-600"
-                        rows={3}
+                        onPaste={handleDescriptionPaste}
+                        placeholder="Describe the product under test, then generate cases from the live backend."
+                        className="w-full min-h-40 resize-y bg-slate-950 border border-slate-700 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none text-slate-100 placeholder-slate-600"
+                        rows={7}
                       />
+                      <div className="mt-1 flex flex-wrap justify-between gap-2 text-[10px] text-slate-500"><span>Large user stories and specifications are supported.</span><span className={customAppDesc.length > 18000 ? 'text-indigo-500 font-semibold' : ''}>{customAppDesc.length.toLocaleString()} characters{customAppDesc.length > 18000 ? ' · Gemini will handle this large input' : ''}</span></div>
                     </div>
 
                     <div className="grid gap-4 md:grid-cols-2">
@@ -1141,11 +1246,9 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                 <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-md flex items-center justify-between">
                   <div>
-                    <span className="text-slate-400 text-xs uppercase tracking-wider font-semibold">Project Code Coverage</span>
-                    <h3 className="text-3xl font-bold text-white mt-1">94.2%</h3>
-                    <span className="text-emerald-400 text-xs font-semibold flex items-center mt-1">
-                      +1.8% from yesterday
-                    </span>
+                    <span className="text-slate-400 text-xs uppercase tracking-wider font-semibold">Execution Coverage</span>
+                    <h3 className="text-3xl font-bold text-white mt-1">{testCases.length ? Math.round((testCases.filter(test => test.status !== 'pending').length / testCases.length) * 100) : 0}%</h3>
+                    <span className="text-emerald-400 text-xs font-semibold flex items-center mt-1">{testCases.filter(test => test.status !== 'pending').length} of {testCases.length} executed</span>
                   </div>
                   <div className="p-3 bg-emerald-500/10 text-emerald-400 rounded-lg">
                     <CheckCircle2 className="w-6 h-6" />
@@ -1180,9 +1283,9 @@ export default function App() {
 
                 <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-md flex items-center justify-between">
                   <div>
-                    <span className="text-slate-400 text-xs uppercase tracking-wider font-semibold">AI Agents Trust Score</span>
-                    <h3 className="text-3xl font-bold text-white mt-1">98.4%</h3>
-                    <span className="text-slate-400 text-xs mt-1 block">Based on 250 verified runs</span>
+                    <span className="text-slate-400 text-xs uppercase tracking-wider font-semibold">Pass Rate</span>
+                    <h3 className="text-3xl font-bold text-white mt-1">{testCases.filter(test => ['passed','failed'].includes(test.status)).length ? Math.round((testCases.filter(test => test.status === 'passed').length / testCases.filter(test => ['passed','failed'].includes(test.status)).length) * 100) : 0}%</h3>
+                    <span className="text-slate-400 text-xs mt-1 block">Based on completed test runs</span>
                   </div>
                   <div className="p-3 bg-amber-500/10 text-amber-400 rounded-lg">
                     <Award className="w-6 h-6" />
@@ -1295,18 +1398,18 @@ export default function App() {
                 
                 {/* Live Simulated Recording Upload Box & Video Viewer */}
                 <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
-                  <div className="flex justify-between items-center">
+                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
                     <div>
                       <h3 className="text-lg font-bold text-white">Visual Timeline Analysis</h3>
                       <p className="text-xs text-slate-400">Analyze UI recordings side-by-side with OCR events and console dumps</p>
                     </div>
-                    <span className="bg-slate-800 text-slate-300 text-xs px-2 py-1 rounded font-mono font-semibold">
+                      <span className="self-start bg-slate-800 text-slate-300 text-xs px-2 py-1 rounded font-mono font-semibold">
                       MP4 - 1080p @ 60 FPS
                     </span>
                   </div>
 
                   {/* Video Canvas Frame */}
-                  <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden relative aspect-video flex flex-col justify-between">
+                  <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden relative aspect-[4/3] sm:aspect-video flex flex-col justify-between">
                     {uploadedVideoUrl ? (
                       <video
                         ref={videoRef}
@@ -1415,7 +1518,7 @@ export default function App() {
                     {isProcessingUpload && (
                       <p className="text-xs text-indigo-300 mt-2 flex items-center justify-center space-x-2">
                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        <span>Uploading video and generating test cases...</span>
+                        <span>Uploading video...</span>
                       </p>
                     )}
                     {uploadedVideoFile && (
@@ -1424,7 +1527,17 @@ export default function App() {
                       </p>
                     )}
                   </div>
-                  {false && uploadedVideoUrl && (
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-4">
+                    <div><h4 className="text-sm font-bold text-white">Test case settings</h4><p className="text-[11px] text-slate-500">Nothing is generated until you click Generate Test Cases.</p></div>
+                    <div><textarea value={customAppDesc} onChange={event => setCustomAppDesc(event.target.value)} onPaste={handleDescriptionPaste} placeholder="Describe the product, story, or flow shown in the recording" rows={6} className="w-full min-h-36 resize-y bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 placeholder-slate-600" /><div className="mt-1 flex flex-wrap justify-between gap-2 text-[10px] text-slate-500"><span>Paste a complete story or specification.</span><span className={customAppDesc.length > 18000 ? 'text-indigo-500 font-semibold' : ''}>{customAppDesc.length.toLocaleString()} characters{customAppDesc.length > 18000 ? ' · Gemini will handle this large input' : ''}</span></div></div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div><label className="text-[10px] uppercase font-bold text-slate-500">Platform</label><div className="flex flex-wrap gap-1.5 mt-2">{['Web', 'Desktop', 'Mobile', 'Mac', 'Tablet'].map(platform => <button key={platform} onClick={() => setSelectedPlatform(platform)} className={`px-2.5 py-1.5 rounded text-[10px] border ${selectedPlatform === platform ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-400'}`}>{platform}</button>)}</div></div>
+                      <div><label className="text-[10px] uppercase font-bold text-slate-500">Number of cases</label><div className="flex flex-wrap gap-1.5 mt-2">{['5', '10', '20', '30', 'Auto', 'Custom'].map(count => <button key={count} onClick={() => setSelectedTestCount(count as typeof selectedTestCount)} className={`px-2.5 py-1.5 rounded text-[10px] border ${selectedTestCount === count ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-400'}`}>{count}</button>)}</div>{selectedTestCount === 'Custom' && <input type="number" min={1} value={customTestCount} onChange={event => setCustomTestCount(event.target.value)} className="mt-2 w-full bg-slate-900 border border-slate-800 rounded p-2 text-xs" />}</div>
+                    </div>
+                    <div><label className="text-[10px] uppercase font-bold text-slate-500">Test case types</label><div className="flex flex-wrap gap-1.5 mt-2">{['UI/UX Checklists', 'Functional Flows', 'Edge Cases', 'Accessibility Audit'].map(type => { const active = selectedPerspectives.includes(type); return <button key={type} onClick={() => setSelectedPerspectives(previous => active ? previous.filter(item => item !== type) : [...previous, type])} className={`px-2.5 py-1.5 rounded text-[10px] border ${active ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-400'}`}>{type}</button>; })}</div></div>
+                    <button onClick={handleGenerateFromRecording} disabled={!uploadedVideoId || aiGenerating || isProcessingUpload} className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-lg py-2.5 text-sm font-semibold flex items-center justify-center gap-2">{aiGenerating ? <><RefreshCw className="w-4 h-4 animate-spin" /> Generating…</> : <><Sparkles className="w-4 h-4" /> Generate Test Cases</>}</button>
+                  </div>
+                  {uploadedVideoUrl && (
                     <div className="mt-3 space-y-3 text-xs text-slate-300">
                       <div className="flex items-center justify-between">
                         <span>{Math.floor(videoCurrentTime)}s</span>
@@ -1455,6 +1568,7 @@ export default function App() {
                         onClick={() => {
                           if (uploadedVideoUrl) URL.revokeObjectURL(uploadedVideoUrl);
                           setUploadedVideoFile(null);
+                          setUploadedVideoId('');
                           setUploadedVideoUrl('');
                           setVideoUploadMessage('Drag & drop or choose a video file to analyze.');
                           setVideoDuration(0);
@@ -1517,12 +1631,12 @@ export default function App() {
                     {parsedLogStatus === 'parsing' ? (
                       <>
                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        <span>AI Log Parser parsing...</span>
+                        <span>Gemini is analyzing...</span>
                       </>
                     ) : (
                       <>
                         <Sparkles className="w-3.5 h-3.5" />
-                        <span>Execute Log Injection</span>
+                        <span>Analyze with Gemini</span>
                       </>
                     )}
                   </button>
@@ -1567,10 +1681,10 @@ export default function App() {
           {activeTab === 'testcases' && (
             <div className="space-y-8 animate-fadeIn">
               
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 items-start">
+              <div>
                 
                 {/* Left Test Case Library Selection */}
-                <div className="xl:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
                       <h3 className="text-lg font-bold text-white">Project Test Case Library</h3>
@@ -1578,7 +1692,7 @@ export default function App() {
                     </div>
 
                     {/* Filter controllers */}
-                    <div className="flex flex-wrap gap-3">
+                    <div className="grid grid-cols-2 gap-2 w-full md:flex md:flex-wrap md:w-auto">
                       <button
                         onClick={() => setShowAddTestCaseForm(true)}
                         className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3 py-1.5 rounded font-semibold transition flex items-center space-x-1.5"
@@ -1705,45 +1819,40 @@ export default function App() {
                   {/* Test Cards List Grid */}
                   <div className="space-y-4">
                     {filteredTestCases.map((tc) => (
-                      <div 
-                        key={tc.id} 
-                        className={`p-5 rounded-xl border transition-all ${
-                          executingTestCase?.id === tc.id ? 'border-indigo-500 bg-indigo-950/10' : 'border-slate-800 bg-slate-950 hover:border-slate-700'
-                        }`}
+                      <details
+                        key={tc.id}
+                        className="group rounded-xl border border-slate-800 bg-slate-950 hover:border-slate-700 open:border-indigo-500/60 transition-all"
+                        onToggle={(event) => {
+                          if ((event.currentTarget as HTMLDetailsElement).open) handleToggleTestCase(tc.id);
+                        }}
                       >
-                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 mb-3">
-                          <div className="flex items-center space-x-2">
-                            <span className="font-mono text-xs font-bold bg-slate-850 px-2 py-0.5 rounded text-indigo-400 border border-slate-800">
-                              {tc.id}
-                            </span>
-                            <span className="text-xs text-slate-500 font-semibold uppercase">{tc.testType}</span>
+                        <summary className="list-none cursor-pointer p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
+                          <div className="min-w-0">
+                            <div className="flex gap-2 items-center mb-2"><span className="font-mono text-[10px] text-indigo-400">{tc.id.slice(0, 8)}</span><span className="text-[10px] uppercase text-slate-500">{tc.testType}</span></div>
+                            <h4 className="font-bold text-sm text-white">{tc.title}</h4>
+                            <p className="text-xs text-slate-500 mt-1">{tc.module} · {tc.platform}</p>
                           </div>
-
-                          <div className="flex items-center space-x-2">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                              tc.severity === 'CRITICAL' ? 'bg-rose-950/50 text-rose-400 border border-rose-900/30' :
-                              tc.severity === 'HIGH' ? 'bg-amber-950/50 text-amber-400 border border-amber-900/30' : 'bg-slate-900 text-slate-400'
-                            }`}>
-                              {tc.severity}
-                            </span>
-                            <span className={`w-2 h-2 rounded-full ${
-                              tc.status === 'passed' ? 'bg-emerald-500' :
-                              tc.status === 'failed' ? 'bg-rose-500' : 'bg-amber-500'
-                            }`} />
-                            <span className="text-xs text-slate-400 font-semibold capitalize">{tc.status}</span>
-                            <button
-                              onClick={() => handleDeleteTestCase(tc.id)}
-                              className="p-1 rounded bg-slate-900 text-slate-500 hover:text-rose-300 hover:bg-rose-950/30 transition"
-                              aria-label={`Delete test case ${tc.title}`}
-                              title="Delete test case"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
+                          <div className="flex items-center justify-between sm:justify-start gap-2 w-full sm:w-auto shrink-0">
+                            <span className={`w-2 h-2 rounded-full ${tc.status === 'passed' ? 'bg-emerald-500' : tc.status === 'failed' ? 'bg-rose-500' : tc.status === 'blocked' ? 'bg-sky-500' : 'bg-amber-500'}`} />
+                            <span className="text-xs text-slate-400 capitalize">{tc.status}</span>
+                            <ChevronDown className="w-4 h-4 text-slate-500 group-open:rotate-180 transition-transform" />
+                          </div>
+                        </summary>
+                        <div className="p-4 border-t border-slate-800">
+                        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                          <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500">
+                            <span className="px-2 py-1 rounded bg-slate-900">{tc.severity}</span><span>{tc.priority}</span><span>·</span><span>{tc.tags.join(', ') || 'No tags'}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            {(['pending', 'passed', 'failed', 'blocked'] as TestCase['status'][]).map(status => <button key={status} onClick={() => handleTestCaseStatus(tc.id, status)} className={`px-2.5 py-1.5 rounded text-[10px] font-semibold capitalize border ${tc.status === status ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'}`}>{status}</button>)}
+                            <button onClick={() => handleDeleteTestCase(tc.id)} className="p-1.5 ml-1 rounded text-slate-500 hover:text-rose-400" aria-label={`Delete test case ${tc.title}`} title="Delete test case"><Trash2 className="w-3.5 h-3.5" /></button>
                           </div>
                         </div>
 
-                        <h4 className="font-bold text-sm text-white mb-2">{tc.title}</h4>
-                        <p className="text-xs text-slate-400 mb-3"><span className="text-slate-500 font-semibold">Preconditions:</span> {tc.preconditions}</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                          <p className="text-xs text-slate-400"><span className="text-slate-500 font-semibold block mb-1">Description</span>{tc.description || 'No separate description was provided.'}</p>
+                          <p className="text-xs text-slate-400"><span className="text-slate-500 font-semibold block mb-1">Preconditions</span>{tc.preconditions}</p>
+                        </div>
 
                         <div className="bg-slate-900/60 p-3 rounded border border-slate-850 space-y-1 mb-4">
                           <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wide block mb-1">Execution Steps:</span>
@@ -1755,6 +1864,27 @@ export default function App() {
                           ))}
                         </div>
 
+                        <div className="bg-emerald-950/15 border border-emerald-900/30 rounded-lg p-3 mb-4"><span className="text-[10px] text-emerald-400 font-bold uppercase">Expected result</span><p className="text-xs text-slate-300 mt-1">{tc.expectedResult || 'No expected result provided.'}</p></div>
+
+                        <div className="border-t border-slate-800 py-5">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+                            <div><h5 className="text-sm font-bold text-white">Automation script</h5><p className="text-[11px] text-slate-500">Fill in the locator keys, then copy the script.</p></div>
+                            <div className="flex gap-1 bg-slate-900 p-1 rounded-lg">{(['playwright', 'cypress', 'selenium'] as const).map(tab => <button key={tab} onClick={() => setAutomationTab(tab)} className={`px-3 py-1.5 rounded text-xs font-semibold capitalize ${automationTab === tab ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>{tab}</button>)}</div>
+                          </div>
+                          {automationLoadingId === tc.id ? <div className="p-8 text-center text-xs text-slate-500">Generating automation preview…</div> : automationByTestCase[tc.id] ? (
+                            <div className="space-y-3">
+                              <details className="bg-slate-900 border border-slate-800 rounded-lg">
+                                <summary className="cursor-pointer list-none flex justify-between items-center p-3"><span><span className="text-[10px] font-bold text-indigo-400 uppercase block">Easy locator keys</span><span className="text-[10px] text-slate-500">TARGET = element to use · EXPECTED_RESULT = proof of success</span></span><span className="text-[10px] text-slate-500">Show values</span></summary>
+                                <div className="px-3 pb-3"><div className="mb-2 p-2 rounded bg-indigo-950/20 border border-indigo-900/30 text-[10px] text-slate-400"><strong className="text-indigo-300">Use a CSS selector.</strong> Recommended: <code>[data-testid="save-button"]</code>. Alternatives: <code>#save-button</code> or <code>[name="email"]</code>. Avoid changing class names and long DOM paths.</div><div className="flex justify-end mb-1"><button onClick={() => handleCopyScript(tc.id, 'locators', JSON.stringify(automationByTestCase[tc.id].locators, null, 2))} className="text-[10px] text-slate-400 hover:text-white flex gap-1 items-center">{copiedScript === `${tc.id}-locators` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />} Copy</button></div><pre className="text-[11px] text-slate-300 overflow-x-auto whitespace-pre-wrap">{JSON.stringify(automationByTestCase[tc.id].locators, null, 2)}</pre></div>
+                              </details>
+                              <div className="bg-slate-950 border border-slate-800 rounded-lg overflow-hidden">
+                                <div className="flex justify-between px-3 py-2 border-b border-slate-800"><span className="text-[10px] font-bold text-slate-400 uppercase">{automationTab}</span><button onClick={() => handleCopyScript(tc.id, automationTab, automationByTestCase[tc.id][automationTab])} className="text-[10px] text-slate-400 hover:text-white flex gap-1 items-center">{copiedScript === `${tc.id}-${automationTab}` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />} Copy script</button></div>
+                                <pre className="p-3 text-[11px] leading-relaxed text-slate-300 overflow-auto max-h-64"><code>{automationByTestCase[tc.id][automationTab]}</code></pre>
+                              </div>
+                            </div>
+                          ) : <p className="text-xs text-rose-400">Automation preview could not be loaded.</p>}
+                        </div>
+
                         <div className="border-t border-slate-900 pt-3 flex flex-wrap gap-2 justify-between items-center">
                           <div className="flex items-center space-x-2 text-xs text-slate-500">
                             <span>Platform: <strong className="text-slate-300">{tc.platform}</strong></span>
@@ -1762,144 +1892,11 @@ export default function App() {
                             <span>Module: <strong className="text-slate-300">{tc.module}</strong></span>
                           </div>
 
-                          <div className="flex space-x-2">
-                            <button
-                              onClick={() => startTestCaseExecution(tc)}
-                              className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3 py-1.5 rounded font-semibold transition flex items-center space-x-1.5"
-                            >
-                              <Play className="w-3.5 h-3.5" />
-                              <span>Run Test</span>
-                            </button>
-                            <button
-                              onClick={() => handleGenerateScript(tc, 'Playwright')}
-                              className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-1.5 rounded font-semibold transition flex items-center space-x-1.5"
-                            >
-                              <Code className="w-3.5 h-3.5" />
-                              <span>Script</span>
-                            </button>
-                          </div>
                         </div>
-                      </div>
+                        </div>
+                      </details>
                     ))}
                   </div>
-                </div>
-
-                {/* Right Interactive Execution Control Box */}
-                <div className="space-y-6">
-                  
-                  {/* Test Executor Panel */}
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-                    <h3 className="text-md font-bold text-white mb-2 flex items-center space-x-2">
-                      <Hammer className="w-4.5 h-4.5 text-indigo-400" />
-                      <span>Interactive Test execution</span>
-                    </h3>
-                    
-                    {executingTestCase ? (
-                      <div className="space-y-4">
-                        <div className="bg-slate-950 p-3.5 rounded border border-indigo-900/40">
-                          <span className="text-[10px] font-bold text-indigo-400 tracking-wider block font-mono">{executingTestCase.id}</span>
-                          <h4 className="font-bold text-sm text-slate-200 mt-1">{executingTestCase.title}</h4>
-                        </div>
-
-                        <div className="space-y-2">
-                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Interactive Checklist:</p>
-                          {executingTestCase.steps.map((step, idx) => (
-                            <label key={idx} className="flex items-start space-x-2.5 p-2 bg-slate-950 rounded border border-slate-900 cursor-pointer hover:border-slate-800 transition">
-                              <input 
-                                type="checkbox" 
-                                checked={executionSteps[idx] || false}
-                                onChange={(e) => {
-                                  const updated = [...executionSteps];
-                                  updated[idx] = e.target.checked;
-                                  setExecutionSteps(updated);
-                                }}
-                                className="mt-0.5 rounded border-slate-800 bg-slate-900 text-indigo-500 focus:ring-0 focus:ring-offset-0"
-                              />
-                              <span className="text-xs text-slate-300 leading-relaxed">{step}</span>
-                            </label>
-                          ))}
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-semibold text-slate-400 mb-1">Execution comment / Logs output (Required for Failure):</label>
-                          <textarea 
-                            value={executionComment}
-                            onChange={(e) => setExecutionComment(e.target.value)}
-                            placeholder="Type observation metrics..."
-                            className="w-full bg-slate-950 border border-slate-800 rounded p-2 text-xs text-slate-100 placeholder-slate-750 focus:outline-none"
-                            rows={3}
-                          />
-                        </div>
-
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={() => submitTestExecutionResult(true)}
-                            className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded text-xs font-semibold transition"
-                          >
-                            Mark Passed
-                          </button>
-                          <button
-                            onClick={() => submitTestExecutionResult(false)}
-                            className="flex-1 bg-rose-600 hover:bg-rose-500 text-white py-2 rounded text-xs font-semibold transition"
-                          >
-                            Mark Failed
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="bg-slate-950 p-6 rounded-lg text-center border border-slate-800">
-                        <CheckSquare className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                        <p className="text-xs text-slate-400">Select any manual test case and click "Run Test" to open the interactive controller panel.</p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* AI QA Script Generator */}
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-                    <h3 className="text-md font-bold text-white mb-2 flex items-center space-x-2">
-                      <Code className="w-4.5 h-4.5 text-indigo-400" />
-                      <span>Script writer output</span>
-                    </h3>
-
-                    {scriptTargetCase ? (
-                      <div className="space-y-4 animate-fadeIn">
-                        <div className="flex space-x-2 bg-slate-950 p-1 rounded border border-slate-850">
-                          {['Playwright', 'Cypress', 'Selenium'].map((lang) => (
-                            <button
-                              key={lang}
-                              onClick={() => handleGenerateScript(scriptTargetCase, lang as any)}
-                              className={`flex-1 py-1 text-[10px] font-bold rounded transition ${selectedScriptType === lang ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-                            >
-                              {lang}
-                            </button>
-                          ))}
-                        </div>
-
-                        <div className="relative">
-                          <pre className="bg-slate-950 text-[10px] font-mono p-3 rounded-lg border border-slate-800 overflow-x-auto text-slate-300 max-h-64 leading-relaxed">
-                            {generatedScriptCode}
-                          </pre>
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(generatedScriptCode);
-                              setActiveLogMsg("Code copied directly to system clipboard.");
-                              setTimeout(() => setActiveLogMsg(""), 3000);
-                            }}
-                            className="absolute right-2 top-2 p-1.5 bg-slate-900 hover:bg-slate-850 rounded text-slate-400 hover:text-white transition"
-                            title="Copy Code"
-                          >
-                            <Copy className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="bg-slate-950 p-6 rounded-lg text-center border border-slate-800">
-                        <Code className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                        <p className="text-xs text-slate-400">Generates instant Playwright / Cypress / Selenium test components dynamically matching visual definitions.</p>
-                      </div>
-                    )}
-                  </div>
-
                 </div>
 
               </div>
@@ -1969,6 +1966,11 @@ export default function App() {
                             <Sparkles className="w-3.5 h-3.5" />
                             <span>Diagnose Bug (RCA)</span>
                           </button>
+                          {oauthStep === 'connected' && selectedRepo && !bug.githubIssueUrl && (
+                            <button onClick={() => handleCreateGitHubIssue(bug.id)} className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-3 py-1.5 rounded font-semibold transition flex items-center space-x-1">
+                              <GitBranch className="w-3.5 h-3.5" /><span>Create GitHub Issue</span>
+                            </button>
+                          )}
                           
                           {bug.githubIssueUrl && (
                             <a
@@ -2092,18 +2094,13 @@ export default function App() {
                     <div className="space-y-6 animate-fadeIn">
                       <div className="p-4 bg-slate-950 rounded-lg border border-slate-800 flex justify-between items-center">
                         <div className="flex items-center space-x-3">
-                          <div className="w-10 h-10 rounded-full bg-emerald-500/15 text-emerald-400 flex items-center justify-center font-bold">
-                            GH
-                          </div>
+                          {githubUser?.avatarUrl ? <img src={githubUser.avatarUrl} alt="GitHub avatar" className="w-10 h-10 rounded-full" /> : <div className="w-10 h-10 rounded-full bg-emerald-500/15 text-emerald-400 flex items-center justify-center font-bold">GH</div>}
                           <div>
-                            <p className="text-xs font-semibold text-white">OAuth handshake completed</p>
-                            <p className="text-[10px] text-emerald-400 font-semibold font-mono">User: principal-qa-architect (Verified Dev)</p>
+                            <p className="text-xs font-semibold text-white">{githubUser?.name}</p>
+                            <p className="text-[10px] text-emerald-400 font-semibold font-mono">@{githubUser?.login} · GitHub verified</p>
                           </div>
                         </div>
-
-                        <span className="bg-emerald-950/40 text-emerald-400 border border-emerald-900/40 text-[10px] font-bold px-2 py-0.5 rounded">
-                          Connected
-                        </span>
+                        <button onClick={handleDisconnectGitHub} className="border border-slate-700 px-3 py-1.5 rounded text-[10px] text-slate-300 hover:text-white">Disconnect</button>
                       </div>
 
                       <div className="space-y-4 bg-slate-950 p-5 rounded-lg border border-slate-850">
@@ -2129,18 +2126,11 @@ export default function App() {
 
                           <div>
                             <label className="block text-xs font-semibold text-slate-400 mb-2">Create New Repo instead:</label>
-                            <button
-                              onClick={() => {
-                                setGithubUser(prev => prev ? { ...prev, repos: [...prev.repos, 'new-automated-testmind-suite'] } : null);
-                                setSelectedRepo('new-automated-testmind-suite');
-                                setPushedSuccess(false);
-                                setActiveLogMsg("Repository slot 'new-automated-testmind-suite' created successfully.");
-                                setTimeout(() => setActiveLogMsg(""), 3000);
-                              }}
-                              className="w-full bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 py-2 rounded text-xs font-semibold transition"
-                            >
-                              Initialize New Repository
-                            </button>
+                            <div className="flex gap-2">
+                              <input value={newRepoName} onChange={event => setNewRepoName(event.target.value)} placeholder="my-test-suite" className="min-w-0 flex-1 bg-slate-900 border border-slate-800 rounded p-2 text-xs text-slate-100" />
+                              <button onClick={handleCreateRepository} disabled={isCreatingRepo || !newRepoName.trim()} className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 px-3 rounded text-xs font-semibold">{isCreatingRepo ? 'Creating…' : 'Create'}</button>
+                            </div>
+                            <label className="mt-2 flex items-center gap-2 text-[10px] text-slate-400"><input type="checkbox" checked={newRepoPrivate} onChange={event => setNewRepoPrivate(event.target.checked)} /> Private repository</label>
                           </div>
                         </div>
 
@@ -2151,7 +2141,7 @@ export default function App() {
                               disabled={isPushingCode}
                               className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs py-2.5 rounded font-semibold transition"
                             >
-                              {isPushingCode ? "Pushing files..." : `Push Test Code & CI Pipelines to: ${selectedRepo}`}
+                              {isPushingCode ? "Publishing real files..." : `Publish Test Cases & CI to: ${selectedRepo}`}
                             </button>
                           </div>
                         )}
@@ -2160,12 +2150,12 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Simulated Output Terminal Console */}
+                {/* Real GitHub API operation output */}
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 flex flex-col justify-between space-y-4">
                   <div>
                     <h3 className="text-md font-bold text-white flex items-center space-x-2">
                       <Terminal className="w-4.5 h-4.5 text-indigo-400" />
-                      <span>Git-Agent Deployment Log</span>
+                      <span>GitHub Publish Log</span>
                     </h3>
                     <p className="text-xs text-slate-400 mt-1">Live terminal view tracking push processes & Action states</p>
 
@@ -2190,7 +2180,7 @@ export default function App() {
 
                   {pushedSuccess && (
                     <div className="p-3 bg-emerald-950/20 border border-emerald-900/50 rounded text-xs text-emerald-400 text-center animate-fadeIn">
-                      Pull Request opened in GitHub repository: #1 Setup Test Suite!
+                      Pull request opened successfully. {pullRequestUrl && <a href={pullRequestUrl} target="_blank" rel="noreferrer" className="underline font-semibold">Open it on GitHub</a>}
                     </div>
                   )}
                 </div>
@@ -2201,6 +2191,27 @@ export default function App() {
           )}
 
           {/* ==================== 6. CODEBASE VIEW ==================== */}
+          {activeTab === 'profile' && (
+            <div className="max-w-3xl mx-auto space-y-6 animate-fadeIn">
+              <div><h2 className="text-xl font-bold text-white">Profile & settings</h2><p className="text-xs text-slate-400 mt-1">Manage your basic account details and default test-generation options.</p></div>
+              <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                <div className="p-5 border-b border-slate-800 flex items-center gap-3"><div className="w-11 h-11 rounded-full bg-indigo-600 flex items-center justify-center"><User className="w-5 h-5 text-white" /></div><div><p className="text-sm font-bold text-white">{profileForm.name || 'Your profile'}</p><p className="text-xs text-slate-500">{userProfile?.email}</p></div></div>
+                <div className="p-5 space-y-5">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <label className="text-xs text-slate-400">Full name<input value={profileForm.name} onChange={event => setProfileForm(previous => ({ ...previous, name: event.target.value }))} className="mt-1.5 w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white" /></label>
+                    <label className="text-xs text-slate-400">Job title<input value={profileForm.jobTitle} onChange={event => setProfileForm(previous => ({ ...previous, jobTitle: event.target.value }))} className="mt-1.5 w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white" /></label>
+                    <label className="text-xs text-slate-400">Organization<input value={profileForm.organization} onChange={event => setProfileForm(previous => ({ ...previous, organization: event.target.value }))} placeholder="Optional" className="mt-1.5 w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white" /></label>
+                    <label className="text-xs text-slate-400">Timezone<select value={profileForm.timezone} onChange={event => setProfileForm(previous => ({ ...previous, timezone: event.target.value }))} className="mt-1.5 w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white"><option value="UTC">UTC</option><option value="Asia/Karachi">Pakistan (Asia/Karachi)</option><option value="Asia/Dubai">Dubai</option><option value="Europe/London">London</option><option value="America/New_York">New York</option><option value="America/Los_Angeles">Los Angeles</option></select></label>
+                  </div>
+                  <div className="border-t border-slate-800 pt-5 space-y-4"><div><h3 className="text-sm font-bold text-white">Generation defaults</h3><p className="text-[11px] text-slate-500">These settings preselect options on Dashboard and Analyze Recording.</p></div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><label className="text-xs text-slate-400">Default platform<select value={profileForm.defaultPlatform} onChange={event => setProfileForm(previous => ({ ...previous, defaultPlatform: event.target.value }))} className="mt-1.5 w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white">{['Web','Desktop','Mobile','Mac','Tablet'].map(value => <option key={value}>{value}</option>)}</select></label><label className="text-xs text-slate-400">Default test count<select value={profileForm.defaultTestCount} onChange={event => setProfileForm(previous => ({ ...previous, defaultTestCount: event.target.value }))} className="mt-1.5 w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white">{['5','10','20','30','Auto','Custom'].map(value => <option key={value}>{value}</option>)}</select></label></div>
+                    <div><span className="text-xs text-slate-400">Default test types</span><div className="flex flex-wrap gap-2 mt-2">{['UI/UX Checklists', 'Functional Flows', 'Edge Cases', 'Accessibility Audit'].map(type => { const active = profileForm.defaultPerspectives.includes(type); return <button key={type} onClick={() => setProfileForm(previous => ({ ...previous, defaultPerspectives: active ? previous.defaultPerspectives.filter(item => item !== type) : [...previous.defaultPerspectives, type] }))} className={`px-3 py-1.5 rounded-full text-xs border ${active ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'}`}>{type}</button>; })}</div></div>
+                  </div>
+                  <div className="flex justify-end"><button onClick={handleSaveProfile} disabled={isSavingProfile || !profileForm.name.trim()} className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-semibold">{isSavingProfile ? 'Saving…' : 'Save settings'}</button></div>
+                </div>
+              </div>
+            </div>
+          )}
           {/* ==================== 7. ANALYTICS AND METRICS VIEW ==================== */}
           {activeTab === 'analytics' && (
             <div className="space-y-8 animate-fadeIn">

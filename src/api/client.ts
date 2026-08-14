@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000/api';
 
 let token: string | null = localStorage.getItem('token');
 
@@ -18,6 +18,16 @@ export function clearToken() {
 
 interface RequestOptions extends RequestInit {
   skipAuth?: boolean;
+}
+
+class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
 }
 
 export async function apiCall(endpoint: string, options: RequestOptions = {}) {
@@ -42,9 +52,7 @@ export async function apiCall(endpoint: string, options: RequestOptions = {}) {
 
   if (response.status === 401) {
     clearToken();
-    const err: any = new Error('Unauthorized');
-    err.status = 401;
-    throw err;
+    throw new ApiError('Unauthorized', 401);
   }
 
   if (!response.ok) {

@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-interface GitHubUser {
+export interface GitHubUser {
   id: number;
   login: string;
   name: string;
@@ -8,7 +8,7 @@ interface GitHubUser {
   email?: string;
 }
 
-interface GitHubRepository {
+export interface GitHubRepository {
   id: number;
   name: string;
   full_name: string;
@@ -83,7 +83,8 @@ export async function getGitHubUserRepositories(accessToken: string): Promise<Gi
 export async function createGitHubRepository(
   accessToken: string,
   repoName: string,
-  description: string
+  description: string,
+  isPrivate = false
 ): Promise<GitHubRepository> {
   try {
     const response = await axios.post(
@@ -91,7 +92,7 @@ export async function createGitHubRepository(
       {
         name: repoName,
         description,
-        private: false,
+        private: isPrivate,
         auto_init: true,
       },
       {
@@ -137,4 +138,82 @@ export async function createGitHubIssue(
     console.error('Error creating GitHub issue:', error);
     throw error;
   }
+}
+
+const githubHeaders = (accessToken: string) => ({
+  Authorization: `Bearer ${accessToken}`,
+  Accept: 'application/vnd.github+json',
+  'X-GitHub-Api-Version': '2022-11-28',
+});
+
+export async function getGitHubRepository(accessToken: string, fullName: string) {
+  const response = await axios.get(`https://api.github.com/repos/${fullName}`, {
+    headers: githubHeaders(accessToken),
+  });
+  return response.data;
+}
+
+export async function createGitHubBranch(
+  accessToken: string,
+  fullName: string,
+  branchName: string,
+  fromBranch: string
+) {
+  const source = await axios.get(
+    `https://api.github.com/repos/${fullName}/git/ref/heads/${encodeURIComponent(fromBranch)}`,
+    { headers: githubHeaders(accessToken) }
+  );
+  await axios.post(
+    `https://api.github.com/repos/${fullName}/git/refs`,
+    { ref: `refs/heads/${branchName}`, sha: source.data.object.sha },
+    { headers: githubHeaders(accessToken) }
+  );
+}
+
+export async function putGitHubFile(
+  accessToken: string,
+  fullName: string,
+  branch: string,
+  filePath: string,
+  content: string,
+  message: string
+) {
+  const response = await axios.put(
+    `https://api.github.com/repos/${fullName}/contents/${filePath.split('/').map(encodeURIComponent).join('/')}`,
+    {
+      message,
+      branch,
+      content: Buffer.from(content, 'utf8').toString('base64'),
+    },
+    { headers: githubHeaders(accessToken) }
+  );
+  return response.data;
+}
+
+export async function createGitHubPullRequest(
+  accessToken: string,
+  fullName: string,
+  title: string,
+  body: string,
+  head: string,
+  base: string
+) {
+  const response = await axios.post(
+    `https://api.github.com/repos/${fullName}/pulls`,
+    { title, body, head, base },
+    { headers: githubHeaders(accessToken) }
+  );
+  return response.data;
+}
+
+export async function revokeGitHubGrant(accessToken: string) {
+  const clientId = process.env.GITHUB_CLIENT_ID;
+  const clientSecret = process.env.GITHUB_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return;
+
+  await axios.delete(`https://api.github.com/applications/${clientId}/grant`, {
+    auth: { username: clientId, password: clientSecret },
+    data: { access_token: accessToken },
+    headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+  });
 }
