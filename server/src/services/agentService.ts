@@ -111,8 +111,14 @@ GROUNDING RULES:
 - If the observation log lacks enough evidence, generate fewer cases. Never fill the requested count with invented coverage.
 - Cover every distinct screen, action, state change, message, outcome, and directly supported alternate or failure scenario in the observation log.
 - Every title must be one short, plain-language sentence beginning exactly with "Verify that".
-- Keep preconditions, steps, and expected results short, concrete, and understandable to a non-technical tester.
-- Each step must describe one action only. Avoid jargon and implementation details.
+- Keep every title to 14 words or fewer.
+- Write for a new manual tester with no technical background.
+- Use common, everyday words and avoid QA or engineering jargon.
+- Keep the precondition and expected result to one short sentence each.
+- Write 1-5 short steps and put one clear user action in each step.
+- Start steps with simple words such as Open, Click, Type, Select, Scroll, or Check.
+- Split combined checks into separate test cases.
+- Do not include explanations or implementation details.
 
 Return ONLY a raw JSON array. Each item must contain title, preconditions, steps, expectedResult, severity, priority, testType, module, platform, and tags.`;
 

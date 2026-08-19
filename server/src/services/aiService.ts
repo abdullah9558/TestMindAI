@@ -64,7 +64,48 @@ function coverageTargetForChunk(chunk: string): number {
   return Math.min(35, Math.max(10, Math.ceil((bullets + criteria + requirementHeadings * 2) * 0.8)));
 }
 
+function uniqueTestCases(testCases: GeneratedTestCase[]): GeneratedTestCase[] {
+  return Array.from(new Map(
+    testCases.map(testCase => [testCase.title.trim().toLowerCase(), testCase])
+  ).values());
+}
+
+async function generateVideoCoverageSuite(input: TestCaseGenerationInput): Promise<GeneratedTestCase[]> {
+  const perspectives = input.perspectives.length ? input.perspectives : ['Functional Flows', 'UI/UX Checklists', 'Edge Cases'];
+  const requestedTotal = input.testCount === 'Auto'
+    ? 60
+    : typeof input.testCount === 'number'
+    ? input.testCount
+    : 50;
+  // Recording coverage is intentionally broader than the general count selector.
+  // Each selected test type receives its own pass so one category cannot consume
+  // the model's output budget and crowd out the others.
+  const minimumTotal = Math.max(requestedTotal, perspectives.length * 12);
+  const casesPerPerspective = Math.max(12, Math.ceil(minimumTotal / perspectives.length));
+  const generated: GeneratedTestCase[] = [];
+
+  console.log(`[Video Coverage] Running ${perspectives.length} evidence-grounded passes, targeting ${casesPerPerspective}+ cases per selected test type.`);
+  for (let index = 0; index < perspectives.length; index += 2) {
+    const batch = perspectives.slice(index, index + 2);
+    const results = await Promise.all(batch.map(perspective => generateTestCasesWithAI({
+      ...input,
+      perspectives: [perspective],
+      testCount: casesPerPerspective,
+      forceGemini: true,
+    })));
+    results.forEach(result => generated.push(...result));
+  }
+
+  const unique = uniqueTestCases(generated);
+  console.log(`[Video Coverage] Merged ${generated.length} generated cases into ${unique.length} unique evidence-grounded cases.`);
+  return unique;
+}
+
 export async function generateTestCasesWithAI(input: TestCaseGenerationInput): Promise<GeneratedTestCase[]> {
+  if (input.videoAnalysis && !input.forceGemini) {
+    return generateVideoCoverageSuite(input);
+  }
+
   if (!input.forceGemini && !input.videoAnalysis && input.appDescription.length > 10000) {
     const chunks = splitStoryIntoCoverageChunks(input.appDescription);
     console.log(`[Coverage Engine] Split large story into ${chunks.length} requirement batches.`);
@@ -79,7 +120,7 @@ export async function generateTestCasesWithAI(input: TestCaseGenerationInput): P
       }));
       results.forEach(result => generated.push(...result));
     }
-    const unique = Array.from(new Map(generated.map(test => [test.title.trim().toLowerCase(), test])).values());
+    const unique = uniqueTestCases(generated);
     console.log(`[Coverage Engine] Merged ${generated.length} cases into ${unique.length} unique cases.`);
     return unique;
   }
@@ -133,14 +174,27 @@ SELECTED TEST TYPE RULES:
 - Do not stop after covering the first feature components. Continue through the entire supplied section.
 
 ${input.videoAnalysis
-  ? 'VIDEO GROUNDING: Use the observation log as the only source of product facts. Generate only the requested perspectives. Every case must cite a source timestamp such as [Video evidence 00:12] in its preconditions or first step. Use exact visible labels and actions. Generate fewer cases rather than inventing unseen features.'
+  ? `VIDEO GROUNDING:
+- Use the observation log as the only source of product facts.
+- Generate only the requested perspective in this pass: ${input.perspectives.join(', ')}.
+- Cover the complete observation log from its earliest timestamp through its final timestamp; do not stop after the first screen or interaction.
+- Convert every distinct observed screen, control, action, value, transition, message, loading state, and outcome into coverage when it applies to the selected perspective.
+- For each observed interaction, consider the successful behavior, visible state before and after, repeated action, cancellation/back behavior, and a directly supported invalid or interruption variation. Mark variations as inferred.
+- Every case must cite its closest source timestamp as [Video evidence 00:12] in the preconditions or first step.
+- Use exact visible labels and actions. Never invent an unseen feature merely to reach the requested minimum.`
   : 'STORY GROUNDING: Use only the supplied user-story section. Do not invent product capabilities that are not stated or directly implied by a listed rule.'}
 
 WRITING RULES:
 - Cover every distinct requirement, workflow, state, validation, alternate path, and failure scenario supported by the story or video evidence.
-- Every title must be a short plain-language sentence beginning exactly with "Verify that".
-- Use simple words. Keep preconditions, steps, and expected results short and concrete.
-- Put one user action in each step. Avoid technical jargon unless it appears in the source.
+- Write for a new manual tester with no technical background.
+- Every title must begin exactly with "Verify that" and contain no more than 14 words.
+- Use common, everyday words. Do not use QA, engineering, or business jargon.
+- Keep the precondition to one short sentence.
+- Write 1-5 short numbered steps. Put only one clear user action in each step.
+- Start each step with a simple action word such as Open, Click, Type, Select, Scroll, or Check.
+- Keep the expected result to one short sentence that says exactly what the user should see.
+- Do not combine multiple checks in one test case. Split them into separate test cases.
+- Do not add explanations, background details, or implementation terms.
 
 Return ONLY raw JSON array. No markdown. No explanation.
 
@@ -227,12 +281,20 @@ export async function analyzeVideoWithAI(videoPath: string): Promise<string> {
         contents: [{
           parts: [
             { inline_data: { mime_type: mimeType, data: base64Video } },
-            { text: `Analyze this QA screen recording from beginning to end. Produce a factual observation log with timestamps. Record every visible screen, exact UI label, user action, entered value, state transition, validation message, loading state, error, and outcome. Separate directly observed behavior from inferred risks. Do not invent features that are not visible.` },
+            { text: `Analyze this QA screen recording exhaustively from the first frame through the final frame.
+
+Create a chronological evidence inventory. Inspect the full timeline, including quiet intervals, and record every distinct:
+- screen, section, modal, menu, tab, form, control, exact visible label, and important displayed value;
+- pointer or keyboard action, text entry, selection, scroll, navigation, submission, cancellation, and repeated action;
+- state before the action, loading or disabled state, transition, validation message, error, success message, and final outcome;
+- responsive, visual, accessibility, interruption, or edge-case risk directly supported by what is visible.
+
+Use granular timestamps throughout the entire recording, preferably at every meaningful change and at least every 2-3 seconds when the visual state changes. Format observations as "OBS-001 | 00:00-00:03 | Screen | Action | Result". End with a coverage inventory listing every observed screen, action, state, message, and outcome exactly once. Clearly label inferred risks as inferred. Do not invent screens, controls, APIs, or product behavior that are not visible.` },
           ],
         }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 4096 },
+        generationConfig: { temperature: 0.15, maxOutputTokens: 8192 },
       },
-      { headers: { 'Content-Type': 'application/json' }, params: { key: apiKey }, timeout: 120000 }
+      { headers: { 'Content-Type': 'application/json' }, params: { key: apiKey }, timeout: Number(process.env.AI_REQUEST_TIMEOUT_MS || 240000) }
     );
 
     const analysis = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
