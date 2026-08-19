@@ -949,7 +949,7 @@ export default function App() {
           {/* Logo Brand Panel */}
           <div className="p-6 border-b border-slate-800 flex items-center space-x-3">
             <div className="brand-logo-shell">
-              <img src="/TestMindAI/testmind-logo-v4.png" alt="TestMind AI" className="brand-logo" />
+              <img src={`${import.meta.env.BASE_URL}testmind-logo-v4.png`} alt="TestMind AI" className="brand-logo" />
             </div>
             <div>
               <h1 className="font-bold text-lg tracking-wide text-white">TestMind AI</h1>

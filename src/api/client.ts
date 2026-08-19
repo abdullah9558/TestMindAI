@@ -45,10 +45,15 @@ export async function apiCall(endpoint: string, options: RequestOptions = {}) {
     }
   }
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...fetchOptions,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      ...fetchOptions,
+      headers,
+    });
+  } catch {
+    throw new Error('Cannot reach the TestMind backend. Check the deployed API URL and backend service.');
+  }
 
   if (response.status === 401) {
     clearToken();
